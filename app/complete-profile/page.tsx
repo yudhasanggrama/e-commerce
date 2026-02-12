@@ -95,42 +95,53 @@ export default function CompleteProfilePage() {
         e.preventDefault();
         setLoading(true);
 
+        // 🔥 gunakan getUser (lebih stabil dari getSession)
         const { data: userRes } = await supabase.auth.getUser();
         const user = userRes.user;
 
         if (!user) {
-        setLoading(false);
-        toast.error("Session expired. Please login again.");
-        router.push("/login");
-        return;
+            setLoading(false);
+            toast.error("Session expired. Please login again.");
+            router.replace("/login");
+            return;
         }
+
+        const uid = user.id;
+        const email = user.email ?? "";
 
         const name = fullName.trim();
         if (!name) {
-        setLoading(false);
-        toast.error("Full name is required.");
-        return;
+            setLoading(false);
+            toast.error("Full name is required.");
+            return;
         }
 
-        // ✅ Jangan set role dari client
+        console.log("auth.uid()", uid);
+
         const { error } = await supabase
-        .from("profiles")
-        .upsert(
+            .from("profiles")
+            .upsert(
             {
-            id: user.id,
-            full_name: name,
-            email: user.email, // hapus kalau kolom email tidak ada di table profiles
+                id: uid,
+                full_name: name,
+                email,
             },
             { onConflict: "id" }
-        );
+            );
 
         setLoading(false);
 
-        if (error) return toast.error(error.message);
+        if (error) {
+            console.log("upsert error:", error);
+            return toast.error(error.message);
+        }
 
         toast.success("Profile saved.");
         router.push("/");
+        router.refresh();
     }
+
+
 
     if (checking) return <div className="p-10 text-center">Loading...</div>;
 
@@ -158,7 +169,7 @@ export default function CompleteProfilePage() {
                 disabled
                 />
 
-                <Button className="w-full" disabled={loading}>
+                <Button className="w-full text-black" disabled={loading}>
                 {loading ? "Saving..." : "Save & Continue"}
                 </Button>
             </form>

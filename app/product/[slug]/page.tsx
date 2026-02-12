@@ -1,16 +1,15 @@
 import ProductNotFound from "@/components/product/ProductNotFound";
 import ProductClient from "./product-client";
-import { getProductBySlug, getRelatedProducts } from "@/lib/db/products"; // ✅ pakai file yang sudah signed url
-
+import { getProductBySlug, getRelatedProducts } from "@/lib/db/products";
 export default async function ProductPage({
   params,
 }: {
-  params: Promise<{ productId: string }>; // ✅ Next 16: params Promise
+  params: Promise<{ slug: string }>; // ✅ Next 16: params Promise
 }) {
   try {
-    const { productId } = await params; // ✅ unwrap params
+    const { slug } = await params; // ✅ unwrap params
 
-    const product = await getProductBySlug(productId);
+    const product = await getProductBySlug(slug);
     if (!product) return <ProductNotFound />;
 
     const relatedProducts = await getRelatedProducts({

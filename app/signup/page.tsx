@@ -81,7 +81,7 @@ export default function SignupPage() {
               required
             />
 
-            <Button className="w-full" disabled={loading}>
+            <Button className="w-full text-black" disabled={loading}>
               {loading ? "Creating account..." : "Sign up"}
             </Button>
           </form>

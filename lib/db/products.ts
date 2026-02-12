@@ -17,6 +17,21 @@ export type Product = {
   category_id: string | null;
 };
 
+function normalizeStoragePath(p: string) {
+  let s = p.trim();
+
+  // kalau kebetulan nyimpan URL full, ambil bagian setelah bucket
+  const marker = `${BUCKET}/`;
+  const idx = s.indexOf(marker);
+  if (idx !== -1) s = s.slice(idx + marker.length);
+
+  // hapus leading slash
+  s = s.replace(/^\/+/, "");
+
+  return s;
+}
+
+
 const BUCKET = "product-images";
 const SIGN_EXPIRES_IN = 60 * 30; // 30 menit (lebih nyaman buat browsing)
 
@@ -29,16 +44,22 @@ async function signImagePaths<T extends { image_url: string | null }>(
     rows.map(async (row) => {
       if (!row.image_url) return { ...row, image_signed_url: null };
 
+      const path = normalizeStoragePath(row.image_url);
+
       const { data, error } = await admin.storage
         .from(BUCKET)
-        .createSignedUrl(row.image_url, SIGN_EXPIRES_IN);
+        .createSignedUrl(path, SIGN_EXPIRES_IN);
 
-      if (error) return { ...row, image_signed_url: null };
+      if (error) {
+        console.warn("createSignedUrl error:", error.message, { raw: row.image_url, path });
+        return { ...row, image_signed_url: null };
+      }
 
-      return { ...row, image_signed_url: data.signedUrl };
+      return { ...row, image_signed_url: data?.signedUrl ?? null };
     })
   );
 }
+
 
 export async function getCategories() {
   const supabase = await createSupabaseServer();
@@ -48,55 +69,68 @@ export async function getCategories() {
 }
 
 export async function getProducts(params: {
-  search?: string;
-  category?: string; // slug
-  sort?: string;
-}) {
-  const supabase = await createSupabaseServer();
+    search?: string;
+    category?: string;
+    sort?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const supabase = await createSupabaseServer();
 
-  let query = supabase
-    .from("products")
-    .select("id,name,slug,brand,description,price,stock,image_url,is_active,category_id")
-    .eq("is_active", true);
+    const limit = params.limit ?? 24;
+    const offset = params.offset ?? 0;
 
-  if (params.search) query = query.ilike("name", `%${params.search}%`);
+    let query = supabase
+      .from("products")
+      .select("id,name,slug,brand,description,price,stock,image_url,is_active,category_id")
+      .eq("is_active", true);
 
-  if (params.category) {
-    const { data: cat, error: catErr } = await supabase
-      .from("categories")
-      .select("id")
-      .eq("slug", params.category)
-      .maybeSingle();
+    // ✅ search lebih bagus: name OR brand
+    if (params.search) {
+      const q = params.search.trim();
+      if (q) query = query.or(`name.ilike.%${q}%,brand.ilike.%${q}%`);
+    }
 
-    if (catErr) throw catErr;
-    if (cat?.id) query = query.eq("category_id", cat.id);
-  }
+    if (params.category && params.category !== "all") {
+      const { data: cat, error: catErr } = await supabase
+        .from("categories")
+        .select("id")
+        .eq("slug", params.category)
+        .maybeSingle();
 
-  if (params.sort === "price_asc") query = query.order("price", { ascending: true });
-  else if (params.sort === "price_desc") query = query.order("price", { ascending: false });
-  else query = query.order("name", { ascending: true });
+      if (catErr) throw catErr;
+      if (cat?.id) query = query.eq("category_id", cat.id);
+    }
 
-  const { data, error } = await query;
-  if (error) throw error;
+    if (params.sort === "price_asc") query = query.order("price", { ascending: true });
+    else if (params.sort === "price_desc") query = query.order("price", { ascending: false });
+    else query = query.order("name", { ascending: true });
 
-  return await signImagePaths((data ?? []) as Product[]);
+    // ✅ pagination
+    query = query.range(offset, offset + limit - 1);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    return await signImagePaths((data ?? []) as Product[]);
 }
+
 
 export async function getProductBySlug(slug: string) {
   const supabase = await createSupabaseServer();
 
-  const { data, error } = await supabase
+  const { data: product, error } = await supabase
     .from("products")
-    .select("id,name,slug,brand,description,price,stock,image_url,category_id,is_active")
+    .select("*")
     .eq("slug", slug)
-    .maybeSingle();
+    .single();
 
-  if (error) throw error;
-  if (!data) return null;
+  if (error || !product) return null;
 
-  const [signed] = await signImagePaths([data as Product]);
+  const [signed] = await signImagePaths([product as Product]);
   return signed;
 }
+
 
 export async function getRelatedProducts(params: {
   currentProductId: string;

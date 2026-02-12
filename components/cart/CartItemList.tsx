@@ -2,12 +2,13 @@
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useCart } from "@/context/CartContext";
 import { Trash2 } from "lucide-react";
 import CartItem from "./CartItem";
+import { useCartStore } from "@/stores/cart.store";
 
 export default function CartItemList() {
-  const { cart, clearCart } = useCart();
+  const cart = useCartStore((s) => s.cart);
+  const clearCart = useCartStore((s) => s.clearCart);
 
   return (
     <Card>

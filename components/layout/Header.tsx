@@ -1,249 +1,216 @@
 "use client";
 
-
-
-import { useCart } from "@/context/CartContext";
-import { Menu, Search, ShoppingCart, X } from "lucide-react";
+import {
+  Menu,
+  Search,
+  ShoppingCart,
+  X,
+  ChevronDown,
+  Phone,
+  Sparkles,
+  ShieldCheck,
+  Package,
+} from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../ui/button";
 import AuthButtons from "../auth/auth-button";
-import { createSupabaseBrowser } from "@/lib/supabase/client";
+import { cn } from "@/lib/utils";
+import { useCartStore } from "@/stores/cart.store";
+
+type Category = {
+  label: string;
+  href: string;
+  icon?: React.ElementType;
+};
+
+export default function Header({
+  initialUser,
+}: {
+  initialUser: { email: string | null; full_name: string | null; role: string | null } | null;
+}) {
+
+  const hasHydrated = useCartStore((s) => s.hasHydrated);
+  const cartCount = useCartStore((s) =>
+    s.cart.reduce((total, item) => total + item.quantity, 0)
+  );
 
 
-export default function Header() {
-  const { cart } = useCart();
-  const cartCount = cart?.reduce((total, item) => total + item.quantity, 0) || 0;
-
-  const [email, setEmail] = useState<string | null>(null); // ✅ tambahkan ini
-  const [isMobileOpen, setIsMobileOpen] = useState(false);
-  const [isScrolled, setIsScrolled] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
 
   const pathname = usePathname();
+  const router = useRouter();
+
+  const [isScrolled, setIsScrolled] = useState(false);
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [catOpen, setCatOpen] = useState(false);
+
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  
+
+  const isAuthPage =
+    pathname === "/login" ||
+    pathname === "/signup" ||
+    pathname === "/complete-profile";
+
+  // Tokopedia-ish categories, tapi tetap clean. Nanti bisa ganti jadi dinamis dari DB.
+  const categories: Category[] = useMemo(
+    () => [
+      { label: "Smartphone", href: "/products", icon: Phone },
+      { label: "Flagship", href: "/products?sort=price_desc", icon: Sparkles },
+      { label: "Garansi Resmi", href: "/products", icon: ShieldCheck },
+      { label: "Aksesoris", href: "/products", icon: Package },
+    ],
+    []
+  );
+
+  const navItems = useMemo(() => [{ href: "/contact", label: "Contact" }], []);
 
   useEffect(() => {
-    const supabase = createSupabaseBrowser();
-    supabase.auth.getUser().then(({ data }) => {
-      setEmail(data.user?.email ?? null);
-    });
-  }, []);
-
-  useEffect(() => {
-    const handleScroll = () => {
-      setIsScrolled(window.scrollY > 10);
-    };
-
-    window.addEventListener("scroll", handleScroll);
-    return () => window.removeEventListener("scroll", handleScroll);
+    const onScroll = () => setIsScrolled(window.scrollY > 8);
+    onScroll();
+    window.addEventListener("scroll", onScroll);
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
   useEffect(() => {
     setIsMobileOpen(false);
+    setCatOpen(false);
   }, [pathname]);
 
-  const toggleMobileMenu = useCallback(() => {
-    setIsMobileOpen((prev) => !prev);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCatOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const closeMobileMenu = useCallback(() => {
+  const toggleMobileMenu = useCallback(() => setIsMobileOpen((p) => !p), []);
+  const closeMobileMenu = useCallback(() => setIsMobileOpen(false), []);
+
+  const onSubmitSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    const q = searchQuery.trim();
+    router.push(q ? `/products?search=${encodeURIComponent(q)}` : "/products");
+    setCatOpen(false);
     setIsMobileOpen(false);
-  }, []);
+  };
 
-  const isActivePath = (path: string) => pathname === path;
+  
 
-  const navItems = [{ href: "/contact", label: "Contact" }];
+  // =========================
+  // AUTH PAGES (simple)
+  // =========================
+  if (isAuthPage) {
+    return (
+      <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
+        <div className="container mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+          <Link href="/" className="flex items-center gap-2">
+            <span className="font-semibold tracking-tight text-foreground">
+              Phone<span className="text-primary">Commerce</span>
+            </span>
+          </Link>
+          <Link
+            href="/contact"
+            className="text-sm font-medium text-muted-foreground hover:text-foreground transition"
+          >
+            Contact
+          </Link>
+        </div>
+      </header>
+    );
+  }
 
-  if (pathname === "/login" || pathname === "/signup" || pathname === "/complete-profile") return (
+  return (
     <>
       <header
-        className={`sticky top-0 z-50 transition-all duration-300 ${
-          isScrolled
-            ? "bg-white/95 backdrop-blur-xl border-b border-gray-200 shadow-lg"
-            : "bg-white/80 backdrop-blur-md border-b border-gray-200 shadow-sm"
-        }`}>
-        <div className="container mx-auto px-4 sm:px-6 py-4">
-          <div className="flex items-center justify-between">
+        className={cn(
+          "sticky top-0 z-50 border-b bg-background/80 backdrop-blur",
+          "transition-shadow",
+          isScrolled ? "shadow-sm" : "shadow-none"
+        )}
+      >
+        <div className="container mx-auto px-4 sm:px-6">
+          {/* Single-row (Shopify style) */}
+          <div className="h-16 flex items-center gap-3">
+            {/* Left: logo */}
+            <Link href="/" className="flex items-center gap-2 shrink-0" aria-label="Home">
+              <span className="text-base sm:text-lg font-semibold tracking-tight text-foreground">
+                Phone<span className="text-primary">Commerce</span>
+              </span>
+            </Link>
 
-              {/* LEFT: logo + nav */}
-              <div className="flex items-center space-x-8 lg:space-x-12">
-                <Link
-                  className="text-2xl tracking-tight text-gray-900 hover:text-gray-700 transition-colors"
-                  href="/"
-                >
-                  PHONE<span className="text-primary">COMMERCE</span>
-                </Link>
+            {/* Center: search (Tokopedia vibes, clean) */}
+            <div className="hidden md:flex flex-1">
+              <form onSubmit={onSubmitSearch} className="relative w-full max-w-2xl">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <input
+                  suppressHydrationWarning
+                  ref={searchRef}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Looking for iPhone, Samsung, Xiaomi..."
+                  className={cn(
+                    "w-full h-10 rounded-full border bg-background pl-11 pr-10 text-sm",
+                    "focus:outline-none focus:ring-2 focus:ring-primary/25 focus:border-primary/30"
+                  )}
+                />
+                {searchQuery.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-2 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+                    aria-label="Clear search"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </form>
+            </div>
 
-              </div>
-              <div className="flex items-center gap-3">
-                <Link
-                  href="/contact"
-                  className="px-5 py-2 rounded-lg  text-sm font-medium"
-                >
-                  Contact
-                </Link>
+            {/* Right: actions */}
+            <div className="ml-auto flex items-center gap-2">
+              {/* Desktop nav links (optional) */}
+              <nav className="hidden lg:flex items-center gap-1">
+                {navItems.map((it) => (
+                  <Link
+                    key={it.href}
+                    href={it.href}
+                    className={cn(
+                      "px-3 py-2 rounded-full text-sm font-medium transition",
+                      pathname === it.href
+                        ? "bg-primary/10 text-primary"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                    )}
+                  >
+                    {it.label}
+                  </Link>
+                ))}
+              </nav>
+
+              {/* Cart */}
+              <Link
+                href="/cart"
+                className="relative rounded-full p-2 hover:bg-muted transition"
+                aria-label={`Cart with ${cartCount} items`}
+              >
+                <ShoppingCart className="h-5 w-5 text-foreground" />
+                {hasHydrated && cartCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[11px] font-semibold bg-primary text-primary-foreground flex items-center justify-center">
+                    {cartCount > 99 ? "99+" : cartCount}
+                  </span>
+                )}
+              </Link>
+
+              <div className="hidden sm:flex items-center">
+                <AuthButtons initialUser={initialUser} />
               </div>
             </div>
+          </div>
         </div>
       </header>
     </>
   );
-
-  return (
-    <header
-      className={`sticky top-0 z-50 transition-all duration-300 ${
-        isScrolled
-          ? "bg-white/95 backdrop-blur-xl border-b border-gray-200 shadow-lg"
-          : "bg-white/80 backdrop-blur-md border-b border-gray-200 shadow-sm"
-      }`}
-    >
-      <div className="container mx-auto px-4 sm:px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-8 lg:space-x-12">
-            <Link
-              className="text-2xl tracking-tight text-gray-900 hover:text-gray-700 transition-colors"
-              href="/"
-              aria-label="BloomShop Home"
-            >
-              PHONE<span className="text-primary">COMMERCE</span>
-            </Link>
-
-            <nav
-              className="hidden md:flex items-center space-x-1"
-              role="navigation"
-              aria-label="Main navigation"
-            >
-              {navItems.map(({ href, label }) => (
-                <Link
-                  key={href}
-                  href={href}
-                  className={`relative py-2 px-4 rounded-lg text-sm font-medium transition-all duration-200 ${
-                    isActivePath(href)
-                      ? "shadow-md"
-                      : "text-gray-700 hover:bg-gray-100 hover:text-gray-900"
-                  }`}
-                  aria-current={isActivePath(href) ? "page" : undefined}
-                >
-                  {label}
-                </Link>
-              ))}
-            </nav>
-          </div>
-
-          <div className="hidden lg:flex flex-1 max-w-md mx-8">
-            <form className="relative w-full">
-              <input
-                type="search"
-                placeholder="Search products..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent transition-all"
-                aria-label="Search products"
-              />
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-            </form>
-          </div>
-
-          <div className="flex items-center space-x-2 sm:space-x-4">
-            <button
-              onClick={() => setIsSearchOpen(!isSearchOpen)}
-              className="lg:hidden p-2 rounded-full hover:bg-gray-100 transition-colors"
-              aria-label="Search"
-            >
-              <Search className="h-5 w-5 text-gray-700" />
-            </button>
-
-            <button
-              onClick={toggleMobileMenu}
-              className="md:hidden p-2 rounded-full hover:bg-gray-100 transition-colors"
-              aria-label="Toggle navigation menu"
-              aria-expanded={isMobileOpen}
-            >
-              {isMobileOpen ? (
-                <X className="h-6 w-6 text-gray-700" />
-              ) : (
-                <Menu className="h-6 w-6 text-gray-700" />
-              )}
-            </button>
-
-            <Link
-              href="/cart"
-              className="relative p-2 rounded-full hover:bg-gray-100 transition-all duration-200 group"
-              aria-label={`Shopping cart with ${cartCount} items`}
-            >
-              <ShoppingCart className="h-6 w-6 text-gray-700 group-hover:text-gray-900 transition-colors" />
-              {cartCount > 0 && (
-                <span
-                  className="absolute -top-1 -right-1 bg-primary text-white text-xs font-bold rounded-full min-w-[20px] h-5 flex items-center justify-center px-1"
-                  aria-label={`${cartCount} items in cart`}
-                >
-                  {cartCount > 99 ? "99+" : cartCount}
-                </span>
-              )}
-            </Link>
-
-          <div className="hidden sm:flex items-center space-x-2">
-              <AuthButtons />
-            </div>
-
-          </div>
-        </div>
-
-        {isSearchOpen && (
-          <div className="lg:hidden mt-4 animate-in slide-in-from-top duration-200">
-            <form className="relative">
-              <input
-                type="search"
-                placeholder="Search products..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-                aria-label="Search products"
-                autoFocus
-              />
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-            </form>
-          </div>
-        )}
-
-        {isMobileOpen && (
-          <nav
-            className="md:hidden mt-4 animate-in slide-in-from-top duration-200"
-            role="navigation"
-            aria-label="Mobile navigation"
-          >
-            <div className="flex flex-col space-y-3 pb-4 border-b border-gray-200">
-              {navItems.map(({ href, label }) => (
-                <Link
-                  key={href}
-                  href={href}
-                  onClick={closeMobileMenu}
-                  className={`text-sm font-medium py-2 px-3 rounded-lg transition-all ${
-                    isActivePath(href)
-                      ? "bg-orange-100"
-                      : "text-gray-700 hover:text-gray-900 hover:bg-gray-50"
-                  }`}
-                  aria-current={isActivePath(href) ? "page" : undefined}
-                >
-                  {label}
-                </Link>
-              ))}
-            </div>
-
-            <div className="flex flex-col space-y-3 pt-4 sm:hidden">
-              <Button variant="outline" className="w-full text-sm" asChild>
-                <Link href="/login" onClick={closeMobileMenu}>
-                  Sign In
-                </Link>
-              </Button>
-            </div>
-          </nav>
-        )}
-      </div>
-    </header>
-  );
 }
-
-

@@ -66,7 +66,7 @@ export default function Footer() {
   return (
     <footer className="bg-background border-t border-border">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="py-12">
+        {/* <div className="py-12">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-8">
             <div className="lg:col-span-2">
               <Link
@@ -134,9 +134,9 @@ export default function Footer() {
               </div>
             ))}
           </div>
-        </div>
-
-        <Separator className="my-8" />
+        </div> */}
+{/* 
+        <Separator className="my-8" /> */}
 
         <div className="py-6 flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">

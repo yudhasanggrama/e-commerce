@@ -57,15 +57,41 @@ export default function LoginPage() {
     e.preventDefault();
     setLoadingEmail(true);
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
     setLoadingEmail(false);
     if (error) return toast.error(error.message);
 
+    // ambil user
+    const { data: userRes } = await supabase.auth.getUser();
+    const user = userRes.user;
+
+    if (!user) return;
+
+    // cek profile di DB
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("full_name")
+      .eq("id", user.id)
+      .maybeSingle();
+
     toast.success("Login sukses");
-    router.push(next);
+
+    // 🚨 kalau belum ada full name → complete profile
+    if (!profile?.full_name) {
+      router.push("/complete-profile");
+      router.refresh();
+      return;
+    }
+
+    // kalau sudah punya profile
+    router.push(next ?? "/");
     router.refresh();
   }
+
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
@@ -79,7 +105,7 @@ export default function LoginPage() {
           <Button
             type="button"
             variant="outline"
-            className="w-full gap-2"
+            className="w-full gap-2 hover:bg-primary/10"
             onClick={loginWithGoogle}
             disabled={loadingEmail || loadingGoogle}
           >
@@ -108,7 +134,7 @@ export default function LoginPage() {
               autoComplete="current-password"
             />
 
-            <Button className="w-full" disabled={loadingEmail || loadingGoogle}>
+            <Button className="w-full text-black" disabled={loadingEmail || loadingGoogle}>
               {loadingEmail ? "Loading..." : "Sign In"}
             </Button>
           </form>

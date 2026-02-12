@@ -4,19 +4,21 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { useCart } from "@/context/CartContext";
 import { CreditCard, Heart, Shield, Truck } from "lucide-react";
 import Link from "next/link";
+import { useCartStore } from "@/stores/cart.store";
+
+const formatIDR = (n: number) =>
+  new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR" }).format(n);
 
 export default function OrderSummary() {
-  const { cart } = useCart();
+  const cart = useCartStore((s) => s.cart);
 
-  const subtotal = cart.reduce(
-    (sum, item) => sum + item.price * item.quantity,
-    0
-  );
-  const shipping = subtotal > 50 ? 0 : 9.99;
-  const tax = subtotal * 0.08;
+  const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+
+  // Kamu bisa ubah aturan shipping/tax sesuai Indonesia
+  const shipping = subtotal > 500_000 ? 0 : 25_000;
+  const tax = 0; // misal belum pakai pajak
   const total = subtotal + shipping + tax;
   const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -32,7 +34,7 @@ export default function OrderSummary() {
             <span className="text-muted-foreground">
               Subtotal ({itemCount} items)
             </span>
-            <span className="font-medium">${subtotal.toFixed(2)}</span>
+            <span className="font-medium">{formatIDR(subtotal)}</span>
           </div>
 
           <div className="flex justify-between text-sm">
@@ -43,22 +45,24 @@ export default function OrderSummary() {
                   Free
                 </Badge>
               ) : (
-                `$${shipping.toFixed(2)}`
+                formatIDR(shipping)
               )}
             </span>
           </div>
 
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Tax</span>
-            <span className="font-medium">${tax.toFixed(2)}</span>
-          </div>
+          {tax > 0 && (
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Tax</span>
+              <span className="font-medium">{formatIDR(tax)}</span>
+            </div>
+          )}
 
           <Separator />
 
           <div className="flex justify-between">
             <span className="text-lg font-semibold">Total</span>
             <span className="text-lg font-bold text-primary">
-              ${total.toFixed(2)}
+              {formatIDR(total)}
             </span>
           </div>
         </div>
@@ -68,20 +72,16 @@ export default function OrderSummary() {
             <div className="flex items-center gap-2 mb-2">
               <Truck className="h-4 w-4 text-accent-foreground" />
               <span className="text-sm font-medium text-accent-foreground">
-                Free shipping on orders over $50
+                Free shipping on orders over {formatIDR(500_000)}
               </span>
             </div>
             <p className="text-xs text-muted-foreground">
-              Add ${(50 - subtotal).toFixed(2)} more to qualify!
+              Add {formatIDR(500_000 - subtotal)} more to qualify!
             </p>
           </div>
         )}
 
-        <Button
-          size="lg"
-          className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
-          asChild
-        >
+        <Button size="lg" className="w-full" asChild>
           <Link href="/checkout" className="flex items-center gap-2">
             <CreditCard className="h-4 w-4" />
             Proceed to Checkout
@@ -91,11 +91,11 @@ export default function OrderSummary() {
         <div className="space-y-3 pt-4 border-t border-border">
           <div className="flex items-center gap-3 text-sm text-muted-foreground">
             <Shield className="h-4 w-4 text-green-500" />
-            <span>Secure SSL checkout</span>
+            <span>Secure checkout</span>
           </div>
           <div className="flex items-center gap-3 text-sm text-muted-foreground">
             <Truck className="h-4 w-4 text-blue-500" />
-            <span>Free returns within 30 days</span>
+            <span>Fast delivery</span>
           </div>
           <div className="flex items-center gap-3 text-sm text-muted-foreground">
             <Heart className="h-4 w-4 text-red-500" />

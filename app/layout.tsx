@@ -1,11 +1,15 @@
 import Footer from "@/components/layout/Footer";
 import Header from "@/components/layout/Header";
-import { CartProvider } from "@/context/CartContext";
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "sonner";
 import { headers } from "next/headers";
+import MobileBottomBar from "@/components/layout/MobileBottomBar";
+import AppProviders from "@/components/providers/AppProviders";
+
+
+import { createSupabaseServer } from "@/lib/supabase/server";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -27,18 +31,38 @@ export default async function RootLayout({
   const pathname = (await headers()).get("x-pathname") || "";
   const isAdmin = pathname.startsWith("/admin");
 
+  const supabase = await createSupabaseServer();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  let initialUser: null | { email: string | null; full_name: string | null; role: string | null } =
+    null;
+
+  if (user) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("full_name, role")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    initialUser = {
+      email: user.email ?? null,
+      full_name: profile?.full_name ?? null,
+      role: profile?.role ?? null,
+    };
+  }
+
   return (
     <html lang="en">
       <body className={`${inter.className} antialiased flex flex-col min-h-screen`}>
-        <CartProvider>
-          {!isAdmin && <Header />}
-
+        <AppProviders>
+          {!isAdmin && <Header initialUser={initialUser} />}
           <main className="flex-grow">{children}</main>
-
           <Toaster />
-
+          {!isAdmin && <MobileBottomBar />}
           {!isAdmin && <Footer />}
-        </CartProvider>
+        </AppProviders>
       </body>
     </html>
   );

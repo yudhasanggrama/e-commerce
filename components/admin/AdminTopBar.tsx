@@ -1,10 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { Menu, Search, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import AdminSidebar from "./AdminSidebar";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase/client";
@@ -26,14 +24,16 @@ export default function AdminTopbar() {
                 <div className="flex items-center gap-2">
                     <div className="lg:hidden">
                         <Sheet>
-                        <SheetTrigger asChild>
-                            <Button variant="outline" size="icon">
-                            <Menu className="h-4 w-4" />
-                            </Button>
-                        </SheetTrigger>
-                        <SheetContent side="left" className="p-0 w-72">
-                            <AdminSidebar />
-                        </SheetContent>
+                            <SheetTrigger asChild>
+                                <SheetTitle>
+                                    <Button variant="outline" size="icon">
+                                        <Menu className="h-4 w-4" />
+                                    </Button>
+                                </SheetTitle>
+                            </SheetTrigger>
+                            <SheetContent side="left" className="p-0 w-72">
+                                <AdminSidebar />
+                            </SheetContent>
                         </Sheet>
                     </div>
 
