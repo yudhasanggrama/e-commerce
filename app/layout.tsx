@@ -18,7 +18,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Phone Commerce",
+  title: "LAPPYGO",
   description:
     "Discover a wide selection of trendy clothes, shoes and accessories on Bloom E-Commerce. Enjoy fast delivery and free returns. Shop now!",
 };
@@ -54,11 +54,11 @@ export default async function RootLayout({
   }
 
   return (
-    <html lang="en">
+     <html lang="en">
       <body className={`${inter.className} antialiased flex flex-col min-h-screen`}>
-        <AppProviders>
+        <AppProviders initialUser={initialUser}>
           {!isAdmin && <Header initialUser={initialUser} />}
-          <main className="flex-grow">{children}</main>
+          <main className="grow">{children}</main>
           <Toaster />
           {!isAdmin && <MobileBottomBar />}
           {!isAdmin && <Footer />}

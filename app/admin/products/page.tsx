@@ -112,7 +112,7 @@ export default async function AdminProductsPage({
                 />
             </div>
 
-            <div className="sm:w-[260px]">
+            <div className="sm:w-65">
                 <label className="text-xs font-medium text-slate-600">Category</label>
                 <select
                 suppressHydrationWarning
@@ -160,7 +160,7 @@ export default async function AdminProductsPage({
             </div>
 
             <div className="overflow-auto">
-            <table className="min-w-[980px] w-full text-sm">
+            <table className="min-w-245 w-full text-sm">
                 <thead className="bg-slate-50 text-slate-600">
                 <tr className="border-b">
                     <th className="px-4 py-3 text-left font-medium">Name</th>

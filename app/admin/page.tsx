@@ -80,7 +80,7 @@ export default async function AdminDashboardPage() {
             <span className="text-xs text-muted-foreground">Last 30 days</span>
           </div>
 
-          <div className="mt-4 h-[260px] rounded-lg bg-muted/40 flex items-center justify-center text-sm text-muted-foreground">
+          <div className="mt-4 h-65 rounded-lg bg-muted/40 flex items-center justify-center text-sm text-muted-foreground">
             Chart placeholder
           </div>
         </div>

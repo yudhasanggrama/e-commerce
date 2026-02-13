@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase/client";
 import { productSchema, type ProductFormValues } from "@/validator/products";
@@ -20,8 +20,6 @@ function FieldError({ message }: { message?: string }) {
 
 type Category = { id: string; name: string; slug: string };
 
-// Optional: tipe defaultValues dari row products (DB)
-// Kamu bisa ganti jadi `any` kalau belum punya type DB.
 type ProductRow = {
   id: string;
   name: string;
@@ -32,8 +30,10 @@ type ProductRow = {
   stock: number;
   category_id: string | null;
   image_url: string | null;
+  image_signed_url?: string | null;
   is_active: boolean;
 };
+
 
 export function AdminProductForm({
   categories,
@@ -49,6 +49,12 @@ export function AdminProductForm({
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!previewUrl && defaultValues?.image_signed_url) {
+      setPreviewUrl(defaultValues.image_signed_url);
+    }
+  }, [defaultValues?.image_signed_url]);
 
 
   const isEdit = Boolean(defaultValues?.id);
@@ -331,7 +337,7 @@ export function AdminProductForm({
 
                     <textarea
                         className={cn(
-                        "min-h-[120px] rounded-md border px-3 py-2 text-sm outline-none transition focus:border-foreground/40 focus:ring-2 focus:ring-foreground/10",
+                        "min-h-30 rounded-md border px-3 py-2 text-sm outline-none transition focus:border-foreground/40 focus:ring-2 focus:ring-foreground/10",
                         errors.description && "border-red-500 focus:ring-red-500/10"
                         )}
                         placeholder="Tulis deskripsi singkat, spesifikasi, dan keunggulan produk..."
@@ -375,13 +381,15 @@ export function AdminProductForm({
                                 if (!file) return;
 
                                 // ✅ preview langsung dari file lokal
-                                const localUrl = URL.createObjectURL(file);
-                                setPreviewUrl(localUrl);
+                                // revoke preview lama kalau itu blob:
+                                setPreviewUrl((prev) => {
+                                  if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
+                                  return URL.createObjectURL(file);
+                                });
 
                                 const maxMb = 3;
                                 if (file.size > maxMb * 1024 * 1024) {
                                     toast.error(`Maksimal ${maxMb}MB`);
-                                    URL.revokeObjectURL(localUrl);
                                     setPreviewUrl(null);
                                     inputEl.value = "";
                                     return;
@@ -390,11 +398,7 @@ export function AdminProductForm({
                                 setUploading(true);
                                 try {
                                     const path = await uploadImage(file);
-
-                                    // ✅ simpan PATH ke form state (buat payload)
                                     setValue("image_url", path, { shouldValidate: true, shouldDirty: true });
-
-                                    // kalau edit, update langsung
                                     if (defaultValues?.id) {
                                     const { error } = await supabase
                                         .from("products")

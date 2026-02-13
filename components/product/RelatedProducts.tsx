@@ -13,10 +13,10 @@ export default function RelatedProducts({ relatedProducts }: { relatedProducts: 
   return (
     <section className="mt-16">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-foreground">Produk terkait</h2>
+        <h2 className="text-2xl font-bold text-foreground">Related Products</h2>
         <Button variant="ghost" asChild>
           <Link href="/products" className="text-primary hover:text-primary/80">
-            Lihat semua
+            View All
           </Link>
         </Button>
       </div>

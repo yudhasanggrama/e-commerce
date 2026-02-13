@@ -186,7 +186,7 @@ export default function ProductClient({
           <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
             <span>{product.brand ? `Brand: ${product.brand}` : "Smartphone"}</span>
             <span className={cn(outOfStock ? "text-destructive" : "")}>
-              {outOfStock ? "Stok habis" : `Stok: ${stock}`}
+              {outOfStock ? "Out of stocks" : `Stocks: ${stock}`}
             </span>
           </div>
         </div>
@@ -244,7 +244,7 @@ export default function ProductClient({
                     <Minus className="h-4 w-4" />
                   </Button>
 
-                  <span className="px-4 py-2 min-w-[64px] text-center font-medium">
+                  <span className="px-4 py-2 min-w-16 text-center font-medium">
                     {quantity}
                   </span>
 
@@ -259,7 +259,7 @@ export default function ProductClient({
                   </Button>
                 </div>
 
-                <span className="text-sm text-muted-foreground">Max according to stok</span>
+                <span className="text-sm text-muted-foreground">Max according to stocks</span>
               </div>
             </div>
 

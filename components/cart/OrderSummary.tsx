@@ -14,13 +14,13 @@ const formatIDR = (n: number) =>
 export default function OrderSummary() {
   const cart = useCartStore((s) => s.cart);
 
-  const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
 
-  // Kamu bisa ubah aturan shipping/tax sesuai Indonesia
   const shipping = subtotal > 500_000 ? 0 : 25_000;
-  const tax = 0; // misal belum pakai pajak
+  const tax = 0;
   const total = subtotal + shipping + tax;
-  const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+
+  const itemCount = cart.reduce((sum, item) => sum + item.qty, 0);
 
   return (
     <Card className="sticky top-4">
@@ -76,12 +76,12 @@ export default function OrderSummary() {
               </span>
             </div>
             <p className="text-xs text-muted-foreground">
-              Add {formatIDR(500_000 - subtotal)} more to qualify!
+              Add {formatIDR(Math.max(0, 500_000 - subtotal))} more to qualify!
             </p>
           </div>
         )}
 
-        <Button size="lg" className="w-full" asChild>
+        <Button size="lg" className="w-full text-black" asChild>
           <Link href="/checkout" className="flex items-center gap-2">
             <CreditCard className="h-4 w-4" />
             Proceed to Checkout

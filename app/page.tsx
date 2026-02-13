@@ -17,7 +17,7 @@ export default async function Home({
       search: sp.search,
       category: sp.category,
       sort: sp.sort,
-      limit: 8,
+      limit: 4,
       offset: 0,
     }),
   ]);
@@ -32,14 +32,14 @@ export default async function Home({
   return (
     <div className="bg-background px-4 py-8 sm:py-12 lg:py-16 lg:px-8 min-h-screen">
       <div className="text-center mx-auto mb-10 space-y-3">
-        <h1 className="text-primary text-4xl font-semibold tracking-tight text-balance xl:text-5xl">
-          Discover Your Next Smartphone
-        </h1>
+          <h1 className="text-primary text-4xl font-semibold tracking-tight text-balance xl:text-5xl">
+            Design Your Future
+          </h1>
 
-        <p className="text-foreground text-base max-w-3xl mx-auto text-balance sm:text-lg">
-          Explore the latest smartphones featuring powerful performance,
-          stunning cameras, and long-lasting battery life.
-        </p>
+          <p className="text-foreground text-base max-w-3xl mx-auto text-balance sm:text-lg">
+            From lecture halls to creative studios, find a laptop that matches 
+            your style and fuels your inspiration without breaking the bank.
+          </p>
       </div>
 
       <ProductList

@@ -2,15 +2,18 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 export async function proxy(req: NextRequest) {
-  // ✅ set header ke REQUEST, bukan response
-  const requestHeaders = new Headers(req.headers);
-  requestHeaders.set("x-pathname", req.nextUrl.pathname);
-
-  let res = NextResponse.next({
-    request: { headers: requestHeaders },
-  });
-
   const pathname = req.nextUrl.pathname;
+
+  // 0) skip static / next assets
+  if (
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/favicon.ico") ||
+    pathname.startsWith("/api")
+  ) {
+    return NextResponse.next();
+  }
+
+  let res = NextResponse.next();
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -19,61 +22,68 @@ export async function proxy(req: NextRequest) {
       cookies: {
         get: (name) => req.cookies.get(name)?.value,
         set: (name, value, options) => {
+          // IMPORTANT: set ke res yang sama
           res.cookies.set({ name, value, ...options });
         },
         remove: (name, options) => {
-          res.cookies.set({ name, value: "", ...options });
+          // IMPORTANT: remove beneran (maxAge 0)
+          res.cookies.set({ name, value: "", ...options, maxAge: 0 });
         },
       },
     }
   );
 
+  // 1) Ini penting supaya token refresh terjadi di middleware bila perlu
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // not logged in
+  // 2) Allow callback lewat tanpa ganggu
+  if (pathname.startsWith("/auth/callback")) return res;
+
+  // 3) Proteksi admin (kalau ga login, redirect)
   if (!user) {
     if (pathname.startsWith("/admin")) {
-      const redirectRes = NextResponse.redirect(new URL("/", req.url));
-      // ✅ juga set header request untuk redirect (optional, tapi aman)
-      redirectRes.headers.set("x-pathname", "/");
-      return redirectRes;
+      const url = req.nextUrl.clone();
+      url.pathname = "/";
+      res = NextResponse.redirect(url);
+      return res; // cookie removal/set handled by adapter
     }
     return res;
   }
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .single();
+  // 4) Ambil role hanya kalau perlu (admin area atau home)
+  const isAtAdminArea = pathname.startsWith("/admin");
+  const isAtHome = pathname === "/";
 
-  const role = profile?.role;
+  if (isAtAdminArea || isAtHome) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle();
 
-  if (pathname === "/" && role === "admin") {
-    const url = req.nextUrl.clone();
-    url.pathname = "/admin/products";
+    const role = profile?.role;
 
-    const redirectRes = NextResponse.redirect(url);
-    res.cookies.getAll().forEach((c) => redirectRes.cookies.set(c));
-    redirectRes.headers.set("x-pathname", "/admin/products");
-    return redirectRes;
-  }
+    if (isAtHome && role === "admin") {
+      const url = req.nextUrl.clone();
+      url.pathname = "/admin/products";
+      res = NextResponse.redirect(url);
+      return res;
+    }
 
-  if (pathname.startsWith("/admin") && role !== "admin") {
-    const url = req.nextUrl.clone();
-    url.pathname = "/";
-
-    const redirectRes = NextResponse.redirect(url);
-    res.cookies.getAll().forEach((c) => redirectRes.cookies.set(c));
-    redirectRes.headers.set("x-pathname", "/");
-    return redirectRes;
+    if (isAtAdminArea && role !== "admin") {
+      const url = req.nextUrl.clone();
+      url.pathname = "/";
+      res = NextResponse.redirect(url);
+      return res;
+    }
   }
 
   return res;
 }
 
+// optional: limit matcher biar middleware ga kepanggil di semua path
 export const config = {
-  matcher: ["/", "/admin/:path*"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };

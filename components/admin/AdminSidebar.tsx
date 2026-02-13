@@ -23,7 +23,7 @@ export default function AdminSidebar() {
       <div className="px-5 py-5">
         <Link href="/admin" className="block">
           <div className="text-lg font-semibold tracking-tight">
-            PHONE<span className="text-primary">COMMERCE</span>
+            LAPPY<span className="text-primary">GO</span>
           </div>
           <div className="text-xs text-muted-foreground">Admin Panel</div>
         </Link>
