@@ -3,6 +3,7 @@ import Image from "next/image";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { createSupabaseService } from "@/lib/supabase/service";
 import OrderStatusBadge from "@/components/order/OrderStatusBadge";
+import RealtimeAdminOrdersClient from "./ui";
 import PaymentStatusBadge from "@/components/order/PaymentStatusBadge";
 
 const BUCKET = "product-images";
@@ -16,6 +17,9 @@ type SearchParams = {
 };
 
 const PAGE_SIZE = 10;
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export default async function AdminOrdersPage(props: {
   searchParams: Promise<SearchParams>;
@@ -38,9 +42,6 @@ export default async function AdminOrdersPage(props: {
 
   if (me?.role !== "admin") return <div className="p-4">Forbidden</div>;
 
-  // =====================
-  // QUERY ORDERS
-  // =====================
   let q = supabase
     .from("orders")
     .select(
@@ -117,6 +118,8 @@ export default async function AdminOrdersPage(props: {
     <div className="p-6 space-y-4">
       <h1 className="text-2xl font-bold">Admin Orders</h1>
 
+      <RealtimeAdminOrdersClient />
+
       <div className="space-y-3">
         {rows.map((o) => (
           <Link
@@ -155,6 +158,7 @@ export default async function AdminOrdersPage(props: {
               {/* BADGES */}
               <div className="flex flex-col items-end gap-1">
                 <OrderStatusBadge status={o.status} />
+                <PaymentStatusBadge status={o.payment_status} />
                 <div className="text-[11px] text-muted-foreground">
                   {new Date(o.created_at).toLocaleDateString("id-ID")}
                 </div>

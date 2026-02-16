@@ -1,11 +1,15 @@
 import Link from "next/link";
 import Image from "next/image";
-import { createSupabaseServer } from "@/lib/supabase/server";
 import OrderStatusBadge from "@/components/order/OrderStatusBadge";
-import RealtimeMyOrdersClient from "./ui";
+import RealtimeMyOrdersRefresh from "./ui";
+import PaymentStatusBadge from "@/components/order/PaymentStatusBadge";
+import { createSupabaseServer } from "@/lib/supabase/server";
 
 const BUCKET = "product-images";
 const SIGN_EXPIRES_IN = 60 * 10; // 10 menit
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export default async function MyOrdersPage() {
   const supabase = await createSupabaseServer();
@@ -32,7 +36,6 @@ export default async function MyOrdersPage() {
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
 
-  // helper: sign 1 path
   async function signPath(path: string | null) {
     if (!path) return null;
     const { data, error } = await supabase.storage
@@ -63,7 +66,7 @@ export default async function MyOrdersPage() {
     <div className="mx-auto max-w-2xl p-4 space-y-4">
       <h1 className="text-xl font-semibold">My Orders</h1>
 
-      <RealtimeMyOrdersClient userId={userId} />
+      <RealtimeMyOrdersRefresh userId={userId} />
 
       <div className="space-y-3">
         {ordersWithSigned.map((o: any) => {
@@ -116,7 +119,10 @@ export default async function MyOrdersPage() {
                       </div>
                     </div>
 
-                    <OrderStatusBadge status={o.status} />
+                    <div className="flex flex-col items-end gap-1">
+                      <PaymentStatusBadge status={o.payment_status} />
+                      <OrderStatusBadge status={o.status} />
+                    </div>
                   </div>
                 </div>
               </div>

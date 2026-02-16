@@ -85,7 +85,7 @@ export function AdminProductForm({
 
   const nameValue = watch("name");
   const slugValue = watch("slug");
-  const imageUrl = watch("image_url"); // ✅ buat preview
+  const imageUrl = watch("image_url");
 
     async function uploadImage(file: File) {
         const ext = file.name.split(".").pop() || "jpg";
@@ -98,7 +98,6 @@ export function AdminProductForm({
 
         if (error) throw error;
 
-        // ✅ simpan path, bukan URL
         return path;
     }
 
@@ -116,7 +115,7 @@ export function AdminProductForm({
 
       const parsed = productSchema.safeParse(normalized);
       if (!parsed.success) {
-        toast.error("Validasi gagal");
+        toast.error("Validation failed");
         return;
       }
 
@@ -133,7 +132,6 @@ export function AdminProductForm({
 
       toast.success(isEdit ? "Produk diupdate" : "Produk dibuat");
       router.push("/admin/products");
-      router.refresh();
     } finally {
       setSaving(false);
     }
@@ -151,7 +149,6 @@ export function AdminProductForm({
 
       toast.success("Produk dihapus");
       router.push("/admin/products");
-      router.refresh();
     } finally {
       setDeleting(false);
     }

@@ -1,5 +1,9 @@
 import ProductBrowse from "@/components/product/ProductBrowse";
 import { getCategories, getProducts } from "@/lib/db/products";
+import { unstable_noStore as noStore } from "next/cache";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 type SP = { search?: string; category?: string; sort?: string; page?: string };
 
@@ -8,6 +12,9 @@ export default async function ProductsPage({
     }: {
     searchParams: Promise<SP>;
     }) {
+
+    noStore();
+
     const sp = await searchParams;
 
     const page = Math.max(parseInt(sp.page ?? "1", 10) || 1, 1);

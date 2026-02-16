@@ -3,18 +3,25 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { ShoppingCart, ArrowUpDown, Tag, CheckCircle2, Check } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 import type { Product } from "@/lib/db/products";
 import { useCartStore } from "@/stores/cart.store";
 import { useAuthStore } from "@/stores/auth.store";
 import { useAuthModalStore } from "@/stores/auth-modal.store";
 import { cn } from "@/lib/utils";
+import { createSupabaseBrowser } from "@/lib/supabase/client";
 
 type Category = { id: string; name: string; slug: string };
 
@@ -41,9 +48,127 @@ export default function ProductBrowse({
   const pathname = usePathname();
   const sp = useSearchParams();
 
-  // Hydration-safe (Radix Select mismatch + extension)
+  // Hydration-safe
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
+
+  // Supabase client
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
+
+  // ✅ Realtime categories state
+  const [localCategories, setLocalCategories] = useState<Category[]>(categories);
+
+  // ✅ Opsi A products state (props -> local)
+  const [localProducts, setLocalProducts] = useState<Product[]>(products);
+
+  // ✅ anti “nyangkut”
+  const [isPending, startTransition] = useTransition();
+  const [syncing, setSyncing] = useState(false);
+
+  // sync props -> local
+  useEffect(() => {
+    setLocalCategories(categories);
+  }, [categories]);
+
+  useEffect(() => {
+    setLocalProducts(products);
+  }, [products]);
+
+  // ✅ helper load categories (fresh)
+  async function loadCategories() {
+    const { data, error } = await supabase
+      .from("categories")
+      .select("id,name,slug")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("[products categories] load error:", error.message);
+      return;
+    }
+    setLocalCategories((data ?? []) as Category[]);
+  }
+
+  // ✅ realtime categories
+  useEffect(() => {
+    loadCategories();
+
+    const channel = supabase
+      .channel("realtime:products_categories")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "categories" },
+        (payload) => {
+          console.log("[products categories] change:", payload.eventType);
+          loadCategories();
+        }
+      )
+      .subscribe((status) => {
+        console.log("[products categories] status:", status);
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supabase]);
+
+  // ✅ realtime products (OPS A) + debounce + min gap + startTransition
+  useEffect(() => {
+    let timer: any = null;
+    let lastRun = 0;
+
+    const MIN_GAP_MS = 800; // refresh minimal jeda
+    const DEBOUNCE_MS = 450; // kumpulin event
+
+    const safeRefresh = () => {
+      // jangan refresh kalau tab/background (hemat & kurangi freeze)
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+
+      const now = Date.now();
+
+      const run = () => {
+        lastRun = Date.now();
+        setSyncing(true);
+        startTransition(() => router.refresh());
+        // matiin indikator setelah sebentar
+        window.setTimeout(() => setSyncing(false), 700);
+      };
+
+      // anti spam: kalau terlalu rapat, debounce
+      if (now - lastRun < MIN_GAP_MS) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(run, DEBOUNCE_MS);
+        return;
+      }
+
+      // normal refresh
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      run();
+    };
+
+    const channel = supabase
+      .channel("realtime:products_browse")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "products" },
+        (payload) => {
+          console.log("[products browse] change:", payload.eventType);
+          safeRefresh();
+        }
+      )
+      .subscribe((status) => {
+        console.log("[products browse] status:", status);
+      });
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supabase, router]);
 
   // Cart store
   const addToCart = useCartStore((s) => s.addToCart);
@@ -52,19 +177,14 @@ export default function ProductBrowse({
   const user = useAuthStore((s) => s.user);
   const openModal = useAuthModalStore((s) => s.openModal);
 
-  // ✅ UI state untuk tombol Add (per produk)
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [addedId, setAddedId] = useState<string | null>(null);
 
   async function doAddToCart(p: Product) {
     if (p.stock <= 0) return;
-
-    // kalau lagi loading di produk ini, stop
     if (loadingId === p.id) return;
 
     setLoadingId(p.id);
-
-    // biar smooth (simulasi delay kecil)
     await new Promise((r) => setTimeout(r, 350));
 
     addToCart(
@@ -82,7 +202,6 @@ export default function ProductBrowse({
     setLoadingId(null);
     setAddedId(p.id);
 
-    // balik normal setelah 1.5s
     window.setTimeout(() => {
       setAddedId((cur) => (cur === p.id ? null : cur));
     }, 1500);
@@ -91,10 +210,8 @@ export default function ProductBrowse({
   async function handleAddToCart(e: React.MouseEvent, p: Product) {
     e.preventDefault();
     e.stopPropagation();
-
     if (p.stock <= 0) return;
 
-    // ✅ kalau belum login: buka modal dan simpan aksi add-to-cart untuk dijalankan setelah login
     if (!user?.email) {
       openModal(async () => {
         await doAddToCart(p);
@@ -106,8 +223,8 @@ export default function ProductBrowse({
   }
 
   const categoryItems = useMemo(
-    () => [{ id: "all", name: "All Products", slug: "all" }, ...categories],
-    [categories]
+    () => [{ id: "all", name: "All Products", slug: "all" }, ...localCategories],
+    [localCategories]
   );
 
   function setQuery(next: Record<string, string | undefined>) {
@@ -133,13 +250,18 @@ export default function ProductBrowse({
           <h1 className="text-2xl font-semibold tracking-tight">Products</h1>
           {search ? (
             <p className="mt-1 text-sm text-muted-foreground">
-              Showing results for <span className="font-medium text-foreground">{search}</span>
+              Showing results for{" "}
+              <span className="font-medium text-foreground">{search}</span>
             </p>
           ) : (
             <p className="mt-1 text-sm text-muted-foreground">
               Find the best smartphones for your needs.
             </p>
           )}
+
+          {(syncing || isPending) ? (
+            <p className="mt-2 text-xs text-muted-foreground">Syncing realtime…</p>
+          ) : null}
         </div>
 
         <div className="flex items-center gap-2">
@@ -227,24 +349,32 @@ export default function ProductBrowse({
             })}
           </div>
 
-          {products.length === 0 ? (
+          {localProducts.length === 0 ? (
             <div className="rounded-2xl border bg-background p-10 text-center">
               <div className="text-base font-semibold">Products not found</div>
               <div className="mt-1 text-sm text-muted-foreground">
                 We couldn&apos;t find any products matching your criteria.
               </div>
               <div className="mt-6 flex justify-center gap-2">
-                <Button variant="outline" className="text-black" onClick={() => setQuery({ search: "" })}>
+                <Button
+                  variant="outline"
+                  className="text-black"
+                  onClick={() => setQuery({ search: "" })}
+                >
                   Reset search
                 </Button>
-                <Button variant="outline" className="text-black" onClick={() => setQuery({ category: "all" })}>
+                <Button
+                  variant="outline"
+                  className="text-black"
+                  onClick={() => setQuery({ category: "all" })}
+                >
                   All Categories
                 </Button>
               </div>
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-              {products.map((p, idx) => {
+              {localProducts.map((p, idx) => {
                 const src = p.image_signed_url ?? "/placeholder-product.png";
                 const out = p.stock <= 0;
 
@@ -256,7 +386,6 @@ export default function ProductBrowse({
                     key={p.id}
                     className="group rounded-2xl border bg-background overflow-hidden hover:shadow-sm transition"
                   >
-                    {/* Clickable area */}
                     <Link href={`/product/${p.slug}`} className="block">
                       <div className="relative aspect-4/5 w-full bg-muted">
                         <Image
@@ -272,7 +401,6 @@ export default function ProductBrowse({
                           priority={idx < 4}
                         />
 
-                        {/* Badges */}
                         <div className="absolute left-3 top-3 flex flex-col gap-2">
                           {out ? (
                             <Badge className="rounded-full" variant="destructive">
@@ -286,7 +414,6 @@ export default function ProductBrowse({
                           )}
                         </div>
 
-                        {/* Soft gradient bottom */}
                         <div className="absolute inset-x-0 bottom-0 h-16 bg-linear-to-t from-background/90 to-transparent" />
                       </div>
 
@@ -299,7 +426,6 @@ export default function ProductBrowse({
                       </div>
                     </Link>
 
-                    {/* Actions */}
                     <div className="px-3 pb-3">
                       <div className="grid grid-cols-2 gap-2">
                         <Button

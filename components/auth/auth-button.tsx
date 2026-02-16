@@ -93,13 +93,6 @@ export default function AuthButtons({ initialUser }: { initialUser: InitialUser 
         <DropdownMenuSeparator />
 
         <DropdownMenuItem asChild>
-          <Link href="/edit-profile">
-            <Settings className="mr-2 h-4 w-4" />
-            Edit Account
-          </Link>
-        </DropdownMenuItem>
-
-        <DropdownMenuItem asChild>
           <Link href="/my-order">
             <Package className="mr-2 h-4 w-4" />
             Orders

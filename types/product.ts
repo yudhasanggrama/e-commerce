@@ -1,8 +1,8 @@
 export type Product = {
   id: string;
   slug: string;
-  image_url: string | null;              // path di private bucket
-  image_signed_url?: string | null;      // ✅ ini yang dipakai UI
+  image_url: string | null;
+  image_signed_url?: string | null;
   name: string;
   brand: string;
   price: number;

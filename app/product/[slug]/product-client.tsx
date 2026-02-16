@@ -6,26 +6,25 @@ import RelatedProducts from "@/components/product/RelatedProducts";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
-import {
-  Check,
-  Heart,
-  Minus,
-  Plus,
-  Share2,
-  ShoppingCart,
-  Star,
-} from "lucide-react";
+import { Heart, Minus, Plus, Share2, ShoppingCart, Star } from "lucide-react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Product } from "@/lib/db/products";
 import { useCartStore } from "@/stores/cart.store";
 import { createSupabaseBrowser } from "@/lib/supabase/client";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { useAuthModalStore } from "@/stores/auth-modal.store";
+import { toast } from "sonner";
 
 const formatIDR = (n: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR" }).format(n);
+
+function toNum(v: any): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
+  return null;
+}
 
 export default function ProductClient({
   product,
@@ -34,15 +33,21 @@ export default function ProductClient({
   product: Product;
   relatedProducts: Product[];
 }) {
+  const router = useRouter();
+
   const addToCart = useCartStore((s) => s.addToCart);
   const setStockInCart = useCartStore((s) => s.setStock);
 
-  const router = useRouter();
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
+
+  const productId = product.id; // stable per render
+  const productIdRef = useRef(productId);
+  productIdRef.current = productId;
 
   const [quantity, setQuantity] = useState(1);
   const [isAdding, setIsAdding] = useState(false);
-  const [justAdded, setJustAdded] = useState(false);
   const [isLiked, setIsLiked] = useState(false);
+
   const [stock, setStock] = useState(product.stock ?? 0);
 
   const [imgLoaded, setImgLoaded] = useState(false);
@@ -50,85 +55,203 @@ export default function ProductClient({
   const openAuthModal = useAuthModalStore((s) => s.openModal);
 
   const outOfStock = stock <= 0;
-
   const imgSrc = useMemo(() => product.image_signed_url ?? null, [product.image_signed_url]);
+  
 
   useEffect(() => {
     setImgLoaded(false);
-  }, [product.id]);
+  }, [productId]);
 
+  // sync dari props (kalau server refresh)
   useEffect(() => {
-    const supabase = createSupabaseBrowser();
+    let t: any = null;
 
-    const channel = supabase
-      .channel(`product-stock-${product.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "products",
-          filter: `id=eq.${product.id}`,
-        },
-        (payload) => {
-          const next = payload.new as any;
-          if (typeof next.stock === "number") {
-            setStock(next.stock);
-            setQuantity((q) => Math.max(1, Math.min(q, Math.max(1, next.stock))));
-            setStockInCart(product.id, next.stock);
+    const softRefresh = () => {
+      if (t) clearTimeout(t);
+      t = setTimeout(() => router.refresh(), 250);
+    };
+
+    let channel: any = null;
+    let authSub: any = null;
+    let cancelled = false;
+
+    const makeChannel = () =>
+      supabase
+        .channel(`product-detail-${productId}`)
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "products", filter: `id=eq.${productId}` },
+          (payload) => {
+            const next = payload.new as any;
+            const prev = payload.old as any;
+
+            // ✅ stock realtime
+            const nextStock = toNum(next?.stock);
+            if (nextStock !== null) {
+              setStock(nextStock);
+              setQuantity((q) => Math.max(1, Math.min(q, Math.max(1, nextStock))));
+              setStockInCart(productIdRef.current, nextStock);
+            }
+
+            // ✅ field lain -> refresh server (signed url, name, price, image, etc)
+            const changedNonStock =
+              (typeof next?.name === "string" && next?.name !== prev?.name) ||
+              (toNum(next?.price) !== null && toNum(next?.price) !== toNum(prev?.price)) ||
+              (next?.brand ?? null) !== (prev?.brand ?? null) ||
+              (next?.description ?? null) !== (prev?.description ?? null) ||
+              (next?.image_url ?? null) !== (prev?.image_url ?? null) ||
+              (typeof next?.is_active === "boolean" && next?.is_active !== prev?.is_active);
+
+            if (changedNonStock) softRefresh();
           }
+        )
+        .on(
+          "postgres_changes",
+          { event: "DELETE", schema: "public", table: "products", filter: `id=eq.${productId}` },
+          () => {
+            router.replace("/products");
+            router.refresh();
+          }
+        )
+        .subscribe((status: string) => {
+          console.log("[product detail] status:", status);
+        });
+
+    const start = async () => {
+      // 1) tunggu session siap
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+
+      if (token) {
+        // 2) inject token ke realtime sebelum subscribe
+        supabase.realtime.setAuth(token);
+        channel = makeChannel();
+      } else {
+        console.log("[product detail] NO_SESSION (skip subscribe)");
+      }
+
+      // 3) kalau token berubah (login / refresh token / logout) -> resubscribe
+      authSub = supabase.auth.onAuthStateChange((_evt: any, session: any) => {
+        if (cancelled) return;
+
+        const tok = session?.access_token;
+
+        if (!tok) {
+          if (channel) supabase.removeChannel(channel);
+          channel = null;
+          console.log("[product detail] NO_SESSION (unsubscribed)");
+          return;
         }
-      )
-      .subscribe();
+
+        supabase.realtime.setAuth(tok);
+
+        if (channel) supabase.removeChannel(channel);
+        channel = makeChannel();
+      });
+    };
+
+    start();
 
     return () => {
+      cancelled = true;
+      if (t) clearTimeout(t);
+      if (channel) supabase.removeChannel(channel);
+      authSub?.data?.subscription?.unsubscribe?.();
+    };
+  }, [supabase, productId, router, setStockInCart]);
+
+  // ✅ Realtime: UPDATE stock harus langsung berubah TANPA refresh
+  useEffect(() => {
+    let t: any = null;
+    const softRefresh = () => {
+      if (t) clearTimeout(t);
+      t = setTimeout(() => router.refresh(), 250);
+    };
+
+    const channel = supabase
+      .channel(`product-detail-${productId}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "products", filter: `id=eq.${productId}` },
+        (payload) => {
+
+
+          const next = payload.new as any;
+          const prev = payload.old as any;
+
+          // ✅ stock realtime
+          const nextStock = toNum(next?.stock);
+          if (nextStock !== null) {
+            setStock(nextStock);
+            setQuantity((q) => Math.max(1, Math.min(q, Math.max(1, nextStock))));
+            setStockInCart(productIdRef.current, nextStock);
+          }
+
+          // ✅ field lain -> refresh server (signed url, name, price, image, etc)
+          const changedNonStock =
+            (typeof next?.name === "string" && next?.name !== prev?.name) ||
+            (toNum(next?.price) !== null && toNum(next?.price) !== toNum(prev?.price)) ||
+            (next?.brand ?? null) !== (prev?.brand ?? null) ||
+            (next?.description ?? null) !== (prev?.description ?? null) ||
+            (next?.image_url ?? null) !== (prev?.image_url ?? null) ||
+            (typeof next?.is_active === "boolean" && next?.is_active !== prev?.is_active);
+
+          if (changedNonStock) softRefresh();
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "products", filter: `id=eq.${productId}` },
+        () => {
+          router.replace("/products");
+          router.refresh();
+        }
+      )
+      .subscribe((status) => {
+        console.log("[product detail] status:", status);
+      });
+
+    return () => {
+      if (t) clearTimeout(t);
       supabase.removeChannel(channel);
     };
-  }, [product.id, setStockInCart]);
+  }, [supabase, productId, router]);
 
   const handleAddToCart = async () => {
+    if (stock <= 0) return;
+
+    const doAction = async () => {
+      setIsAdding(true);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      const safeQty = Math.max(1, Math.min(quantity, stock));
+
+      addToCart(
+        {
+          id: productId,
+          name: product.name,
+          price: product.price,
+          image: imgSrc ?? "",
+          stock,
+          slug: product.slug,
+        },
+        safeQty
+      );
+
+      setIsAdding(false);
+      toast.success("This product has been added to cart")
+      setTimeout(() => 1600);
+    };
+
     if (!isAuthed) {
       openAuthModal(async () => {
-        const safeQty = Math.max(1, Math.min(quantity, stock));
-        addToCart(
-          {
-            id: product.id,
-            name: product.name,
-            price: product.price,
-            image: imgSrc ?? "",
-            stock,
-            slug: product.slug,
-          },
-          safeQty
-        );
+        await doAction();
       });
       return;
     }
 
-    if (stock <= 0) return;
-
-    setIsAdding(true);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-
-    const safeQty = Math.max(1, Math.min(quantity, stock));
-
-    addToCart(
-      {
-        id: product.id,
-        name: product.name,
-        price: product.price,
-        image: imgSrc ?? "",
-        stock,
-        slug: product.slug,
-      },
-      safeQty
-    );
-
-    setIsAdding(false);
-    setJustAdded(true);
-    setTimeout(() => setJustAdded(false), 1600);
+    await doAction();
   };
-
 
   const handleBuyNow = async () => {
     await handleAddToCart();
@@ -136,12 +259,8 @@ export default function ProductClient({
   };
 
   const handleQuantityChange = (type: "increment" | "decrement") => {
-    if (type === "increment") {
-      setQuantity((prev) => Math.min(prev + 1, Math.max(1, stock)));
-    }
-    if (type === "decrement") {
-      setQuantity((prev) => Math.max(1, prev - 1));
-    }
+    if (type === "increment") setQuantity((prev) => Math.min(prev + 1, Math.max(1, stock)));
+    if (type === "decrement") setQuantity((prev) => Math.max(1, prev - 1));
   };
 
   return (
@@ -270,10 +389,9 @@ export default function ProductClient({
                 disabled={authLoading || isAdding || outOfStock}
                 className="text-black"
               >
-                <ShoppingCart />{!isAuthed ? "Add to cart" : outOfStock ? "Out of stocks" : "Add to cart"}
+                <ShoppingCart />
+                {!isAuthed ? "Add to cart" : outOfStock ? "Out of stocks" : "Add to cart"}
               </Button>
-
-
 
               <Button size="lg" variant="outline" onClick={handleBuyNow} disabled={outOfStock}>
                 Beli sekarang
@@ -285,13 +403,20 @@ export default function ProductClient({
                 variant="ghost"
                 size="sm"
                 onClick={() => setIsLiked(!isLiked)}
-                className={cn("text-muted-foreground hover:text-black", isLiked && "text-destructive")}
+                className={cn(
+                  "text-muted-foreground hover:text-black",
+                  isLiked && "text-destructive"
+                )}
               >
                 <Heart className={cn("h-4 w-4 mr-2", isLiked && "fill-current")} />
                 Wishlist
               </Button>
 
-              <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-foreground"
+              >
                 <Share2 className="h-4 w-4 mr-2" />
                 Share
               </Button>
