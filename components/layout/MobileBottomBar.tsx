@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Home, Search, ShoppingCart, User, LogOut, X } from "lucide-react";
+import { Home, Search, ShoppingCart, User, LogOut, X, Package } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -240,12 +240,18 @@ export default function MobileBottomBar() {
 
                   {user?.email ? (
                     <>
+                    <Button asChild className="w-full text-black bg-white hover:bg-gray-200">
+                      <Link href="/my-order">
+                        <Package className="mr-2 h-4 w-4" />
+                        Orders
+                      </Link>
+                    </Button>
                       <Button
                         variant="destructive"
                         className="w-full"
                         onClick={handleLogout}
                       >
-                        <LogOut className="mr-2 h-4 w-4" />
+                      <LogOut className="mr-2 h-4 w-4" />
                         Logout
                       </Button>
                     </>

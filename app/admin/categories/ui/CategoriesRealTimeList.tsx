@@ -43,7 +43,7 @@ export default function CategoriesRealTimeList() {
         }
       )
       .subscribe((status) => {
-        console.log("[admin categories] status:", status); // harus SUBSCRIBED
+        console.log("[admin categories] status:", status);
       });
 
     return () => {

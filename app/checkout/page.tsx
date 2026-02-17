@@ -24,12 +24,6 @@ export default function CheckoutPage() {
   const clearCart = useCartStore((s) => s.clearCart);
 
   const [loading, setLoading] = useState(false);
-
-  const subtotal = cart.reduce((sum, it) => sum + it.price * it.qty, 0);
-  const shipping_fee = subtotal > 500_000 ? 0 : 25_000;
-  const tax = 0;
-  const total = subtotal + shipping_fee + tax;
-
   const [shipping, setShipping] = useState({
     name: "",
     email: "",
@@ -37,17 +31,37 @@ export default function CheckoutPage() {
     address: "",
   });
 
-  // ✅ hydrate store (fixed: useEffect)
+  // Hitung Summary (Client side hanya untuk tampilan)
+  const subtotal = cart.reduce((sum, it) => sum + it.price * it.qty, 0);
+  const shipping_fee = subtotal > 500_000 ? 0 : 25_000;
+  const tax = 0
+  const total = subtotal + shipping_fee + tax;
+
   useEffect(() => {
     if (!hydrated) hydrate().catch(() => {});
   }, [hydrated, hydrate]);
 
+  const finalizeOrder = async (orderId: string) => {
+    try {
+      // Pastikan keranjang bersih sebelum pindah halaman
+      await (clearCart as any)();
+    } finally {
+      router.push(`/orders/${orderId}/confirmation`);
+    }
+  };
+
   async function handlePay() {
+    // Validasi input sederhana
+    if (!shipping.name || !shipping.email || !shipping.address) {
+      alert("Mohon isi data pengiriman dengan lengkap.");
+      return;
+    }
+
     setLoading(true);
     try {
-      const { data } = await supabase.auth.getUser();
-      if (!data.user) {
-        router.push("/login");
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        router.push("/login?next=/checkout");
         return;
       }
 
@@ -57,7 +71,7 @@ export default function CheckoutPage() {
       }));
 
       if (items.length === 0) {
-        alert("Cart kosong.");
+        alert("Keranjang belanja kosong.");
         router.push("/cart");
         return;
       }
@@ -65,42 +79,30 @@ export default function CheckoutPage() {
       const res = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        // ✅ jangan kirim shipping_fee dari client (server hitung ulang)
         body: JSON.stringify({ items, shipping }),
       });
 
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.error ?? "Checkout failed");
+      if (!res.ok) throw new Error(json?.error ?? "Gagal memproses pesanan");
 
-      const orderId = json.order_id as string;
-      const snapToken = json.snap_token as string;
+      const { order_id, snap_token } = json;
 
       const w = window as any;
       if (!w.snap) {
-        throw new Error("Midtrans Snap belum siap. Coba reload halaman dan ulangi.");
+        throw new Error("Sistem pembayaran belum siap. Silakan refresh halaman.");
       }
 
-      w.snap.pay(snapToken, {
-        onSuccess: async () => {
-          try {
-            // kalau clearCart sync, ini tetap aman
-            await (clearCart as any)();
-          } catch {}
-          router.push(`/orders/${orderId}/confirmation`);
+      w.snap.pay(snap_token, {
+        onSuccess: () => finalizeOrder(order_id),
+        onPending: () => finalizeOrder(order_id),
+        onError: () => finalizeOrder(order_id),
+        onClose: () => {
+          setLoading(false);
+          finalizeOrder(order_id);
         },
-        onPending: async () => {
-          try {
-            await (clearCart as any)();
-          } catch {}
-          router.push(`/orders/${orderId}/confirmation`);
-        },
-        onError: () => router.push(`/orders/${orderId}/confirmation`),
-        onClose: () => router.push(`/orders/${orderId}/confirmation`),
       });
     } catch (e: any) {
-      alert(e?.message ?? "Error");
-    } finally {
+      alert(e?.message ?? "Terjadi kesalahan sistem");
       setLoading(false);
     }
   }

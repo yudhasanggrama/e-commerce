@@ -162,3 +162,17 @@ export async function removeCartItem(productId: string) {
 
   if (error) throw new Error(error.message);
 }
+
+export async function clearMyCart() {
+  const { supabase, user } = await requireUser();
+  const cartId = await getOrCreateActiveCartId(user.id, supabase);
+
+  const { error } = await supabase
+    .from("cart_items")
+    .delete()
+    .eq("cart_id", cartId);
+
+  if (error) throw new Error(error.message);
+
+  return { ok: true };
+}

@@ -1,16 +1,4 @@
-import { Resend } from "resend";
-
-const resend = new Resend(process.env.RESEND_API_KEY!);
-
-export async function sendOrderEmail(params: { to: string; subject: string; html: string }) {
-  const from = process.env.EMAIL_FROM!;
-  return resend.emails.send({
-    from,
-    to: params.to,
-    subject: params.subject,
-    html: params.html,
-  });
-}
+// lib/email/templates.ts
 
 /** ===== Helpers ===== */
 function esc(s: string) {
@@ -80,7 +68,6 @@ function emailShell(opts: {
     <title>${esc(opts.title)}</title>
   </head>
   <body style="margin:0;padding:0;background:#f3f4f6;">
-    <!-- Preheader (hidden) -->
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
       ${preheader}
     </div>
@@ -88,11 +75,9 @@ function emailShell(opts: {
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;">
       <tr>
         <td align="center" style="padding:24px 12px;">
-          <!-- Container -->
           <table role="presentation" width="640" cellpadding="0" cellspacing="0"
             style="width:100%;max-width:640px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb;">
-            
-            <!-- Brand bar -->
+
             <tr>
               <td style="padding:18px 20px;background:#0b1220;">
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
@@ -113,7 +98,6 @@ function emailShell(opts: {
               </td>
             </tr>
 
-            <!-- Body -->
             <tr>
               <td style="padding:22px 20px;font-family:Arial, sans-serif;color:#111827;">
                 ${opts.bodyHtml}
@@ -134,14 +118,17 @@ function emailShell(opts: {
                 }
 
                 <div style="margin-top:18px;border-top:1px solid #e5e7eb;padding-top:14px;font-size:12px;color:#6b7280;line-height:1.6;">
-                  ${opts.footerNote ? `<div>${esc(opts.footerNote)}</div>` : `<div>Butuh bantuan? Balas email ini untuk support.</div>`}
+                  ${
+                    opts.footerNote
+                      ? `<div>${esc(opts.footerNote)}</div>`
+                      : `<div>Butuh bantuan? Balas email ini untuk support.</div>`
+                  }
                   <div style="margin-top:6px;">© ${year} ${esc(opts.brand)}.</div>
                 </div>
               </td>
             </tr>
           </table>
 
-          <!-- tiny footer -->
           <div style="max-width:640px;margin-top:10px;font-family:Arial, sans-serif;font-size:11px;color:#9ca3af;line-height:1.6;text-align:center;">
             Email ini dikirim otomatis untuk update status pesanan.
           </div>
@@ -152,7 +139,7 @@ function emailShell(opts: {
 </html>`;
 }
 
-/** ===== Templates ===== */
+/** ===== Templates (existing) ===== */
 
 export function paidEmailTemplate(args: { orderId: string; total: number; appUrl: string }) {
   const url = `${args.appUrl}/orders/${args.orderId}/confirmation`;
@@ -240,5 +227,111 @@ export function shippedEmailTemplate(args: { orderId: string; appUrl: string }) 
     badgeHtml: pill("SHIPPED", "#DBEAFE", "#1D4ED8"),
     bodyHtml,
     cta: { url, label: "Lihat status" },
+  });
+}
+
+/** ===== Templates (new) ===== */
+
+export function cancelRequestEmailTemplate(args: {
+  orderId: string;
+  appUrl: string;
+  reason?: string | null;
+}) {
+  const url = `${args.appUrl}/orders/${args.orderId}/confirmation`;
+
+  const bodyHtml = `
+    <p style="margin:0 0 12px 0;font-size:14px;line-height:1.7;">
+      Kami sudah menerima <b>permintaan pembatalan</b> untuk pesanan ini.
+      Tim kami akan meninjau permintaan kamu secepatnya.
+    </p>
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+      style="border:1px solid #e5e7eb;border-radius:14px;background:#fafafa;padding:14px 16px;">
+      ${kvRow("Order ID", args.orderId)}
+      ${kvRow("Status", "Cancellation Requested")}
+      ${args.reason ? kvRow("Reason", String(args.reason)) : ""}
+    </table>
+
+    <div style="margin-top:12px;font-size:12px;color:#6b7280;line-height:1.6;">
+      Kamu akan mendapatkan email lagi ketika permintaan disetujui / ditolak.
+    </div>
+  `;
+
+  return emailShell({
+    brand: "LappyGo",
+    title: "Permintaan pembatalan diterima",
+    preheader: `Permintaan pembatalan untuk order ${args.orderId} sudah kami terima.`,
+    badgeHtml: pill("REQUESTED", "#FEF3C7", "#92400E"),
+    bodyHtml,
+    cta: { url, label: "Lihat status order" },
+  });
+}
+
+export function cancelledEmailTemplate(args: {
+  orderId: string;
+  appUrl: string;
+  note?: string | null;
+}) {
+  const url = `${args.appUrl}/orders/${args.orderId}/confirmation`;
+
+  const bodyHtml = `
+    <p style="margin:0 0 12px 0;font-size:14px;line-height:1.7;">
+      Pesanan kamu telah <b>dibatalkan</b>.
+      Jika pembayaran sudah dilakukan, proses refund (jika ada) akan mengikuti kebijakan yang berlaku.
+    </p>
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+      style="border:1px solid #e5e7eb;border-radius:14px;background:#fafafa;padding:14px 16px;">
+      ${kvRow("Order ID", args.orderId)}
+      ${kvRow("Status", "Cancelled")}
+      ${args.note ? kvRow("Note", String(args.note)) : ""}
+    </table>
+
+    <div style="margin-top:12px;font-size:12px;color:#6b7280;line-height:1.6;">
+      Kalau kamu masih butuh barangnya, kamu bisa checkout ulang kapan saja.
+    </div>
+  `;
+
+  return emailShell({
+    brand: "LappyGo",
+    title: "Order dibatalkan",
+    preheader: `Order ${args.orderId} telah dibatalkan.`,
+    badgeHtml: pill("CANCELLED", "#FEE2E2", "#991B1B"),
+    bodyHtml,
+    cta: { url, label: "Buka order" },
+  });
+}
+
+export function cancelRejectedEmailTemplate(args: {
+  orderId: string;
+  appUrl: string;
+  reason?: string | null;
+}) {
+  const url = `${args.appUrl}/orders/${args.orderId}/confirmation`;
+
+  const bodyHtml = `
+    <p style="margin:0 0 12px 0;font-size:14px;line-height:1.7;">
+      Maaf, <b>permintaan pembatalan</b> untuk pesanan ini <b>tidak disetujui</b>.
+    </p>
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+      style="border:1px solid #e5e7eb;border-radius:14px;background:#fafafa;padding:14px 16px;">
+      ${kvRow("Order ID", args.orderId)}
+      ${kvRow("Status", "Cancellation Rejected")}
+      ${args.reason ? kvRow("Reason", String(args.reason)) : ""}
+    </table>
+
+    <div style="margin-top:12px;font-size:12px;color:#6b7280;line-height:1.6;">
+      Kamu tetap bisa melanjutkan proses order lewat halaman order.
+    </div>
+  `;
+
+  return emailShell({
+    brand: "LappyGo",
+    title: "Permintaan pembatalan ditolak",
+    preheader: `Permintaan pembatalan untuk order ${args.orderId} tidak disetujui.`,
+    badgeHtml: pill("REJECTED", "#E0E7FF", "#3730A3"),
+    bodyHtml,
+    cta: { url, label: "Buka order" },
   });
 }

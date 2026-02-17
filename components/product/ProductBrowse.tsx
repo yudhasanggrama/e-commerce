@@ -1,10 +1,17 @@
 "use client";
 
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState, useTransition } from "react";
-import { ShoppingCart, ArrowUpDown, Tag, CheckCircle2, Check } from "lucide-react";
+import { ShoppingCart, CheckCircle2, Check } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -22,12 +29,16 @@ import { useAuthStore } from "@/stores/auth.store";
 import { useAuthModalStore } from "@/stores/auth-modal.store";
 import { cn } from "@/lib/utils";
 import { createSupabaseBrowser } from "@/lib/supabase/client";
+import { useResilientRealtime } from "@/hooks/useResilientRealtime";
 
 type Category = { id: string; name: string; slug: string };
 
 function formatIDR(n: number) {
   return new Intl.NumberFormat("id-ID").format(n);
 }
+
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 export default function ProductBrowse({
   products,
@@ -48,454 +59,426 @@ export default function ProductBrowse({
   const pathname = usePathname();
   const sp = useSearchParams();
 
-  // Hydration-safe
+  // --- 1) REFS & STABLE IDS ---
+  const isMountedRef = useRef(true);
+  const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const adminAddingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const sessionId = useMemo(() => Math.random().toString(36).slice(2), []);
+
+  // --- 2) STATE ---
   const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const [syncing, setSyncing] = useState(false);
+  const [isPending, startTransition] = useTransition();
 
-  // Supabase client
+  // ✅ indicator when a new product is inserted (e.g., by admin)
+  const [adminAdding, setAdminAdding] = useState(false);
+
   const supabase = useMemo(() => createSupabaseBrowser(), []);
-
-  // ✅ Realtime categories state
   const [localCategories, setLocalCategories] = useState<Category[]>(categories);
-
-  // ✅ Opsi A products state (props -> local)
   const [localProducts, setLocalProducts] = useState<Product[]>(products);
 
-  // ✅ anti “nyangkut”
-  const [isPending, startTransition] = useTransition();
-  const [syncing, setSyncing] = useState(false);
-
-  // sync props -> local
-  useEffect(() => {
-    setLocalCategories(categories);
-  }, [categories]);
-
-  useEffect(() => {
-    setLocalProducts(products);
-  }, [products]);
-
-  // ✅ helper load categories (fresh)
-  async function loadCategories() {
-    const { data, error } = await supabase
-      .from("categories")
-      .select("id,name,slug")
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      console.error("[products categories] load error:", error.message);
-      return;
-    }
-    setLocalCategories((data ?? []) as Category[]);
-  }
-
-  // ✅ realtime categories
-  useEffect(() => {
-    loadCategories();
-
-    const channel = supabase
-      .channel("realtime:products_categories")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "categories" },
-        (payload) => {
-          console.log("[products categories] change:", payload.eventType);
-          loadCategories();
-        }
-      )
-      .subscribe((status) => {
-        console.log("[products categories] status:", status);
-      });
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supabase]);
-
-  // ✅ realtime products (OPS A) + debounce + min gap + startTransition
-  useEffect(() => {
-    let timer: any = null;
-    let lastRun = 0;
-
-    const MIN_GAP_MS = 800; // refresh minimal jeda
-    const DEBOUNCE_MS = 450; // kumpulin event
-
-    const safeRefresh = () => {
-      // jangan refresh kalau tab/background (hemat & kurangi freeze)
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-
-      const now = Date.now();
-
-      const run = () => {
-        lastRun = Date.now();
-        setSyncing(true);
-        startTransition(() => router.refresh());
-        // matiin indikator setelah sebentar
-        window.setTimeout(() => setSyncing(false), 700);
-      };
-
-      // anti spam: kalau terlalu rapat, debounce
-      if (now - lastRun < MIN_GAP_MS) {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(run, DEBOUNCE_MS);
-        return;
-      }
-
-      // normal refresh
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      run();
-    };
-
-    const channel = supabase
-      .channel("realtime:products_browse")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "products" },
-        (payload) => {
-          console.log("[products browse] change:", payload.eventType);
-          safeRefresh();
-        }
-      )
-      .subscribe((status) => {
-        console.log("[products browse] status:", status);
-      });
-
-    return () => {
-      if (timer) clearTimeout(timer);
-      supabase.removeChannel(channel);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supabase, router]);
-
-  // Cart store
   const addToCart = useCartStore((s) => s.addToCart);
-
-  // Auth store + modal
   const user = useAuthStore((s) => s.user);
   const openModal = useAuthModalStore((s) => s.openModal);
 
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [addedId, setAddedId] = useState<string | null>(null);
 
-  async function doAddToCart(p: Product) {
-    if (p.stock <= 0) return;
-    if (loadingId === p.id) return;
+  // --- 3) LIFECYCLE ---
+  useEffect(() => {
+    isMountedRef.current = true;
+    setMounted(true);
 
-    setLoadingId(p.id);
-    await new Promise((r) => setTimeout(r, 350));
+    return () => {
+      isMountedRef.current = false;
+      if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+      if (adminAddingTimerRef.current) clearTimeout(adminAddingTimerRef.current);
+    };
+  }, []);
 
-    addToCart(
-      {
-        id: p.id,
-        slug: p.slug,
-        name: p.name,
-        price: p.price,
-        image: p.image_signed_url || "/placeholder-product.png",
-        stock: p.stock,
-      },
-      1
-    );
+  // keep local state in sync with server props (after router.refresh)
+  useEffect(() => {
+    setLocalCategories(categories);
+    setLocalProducts(products);
+  }, [categories, products]);
 
-    setLoadingId(null);
-    setAddedId(p.id);
+  // --- 4) QUERY HELPERS ---
+  const setQuery = useCallback(
+    (next: Record<string, string | undefined>) => {
+      const qs = new URLSearchParams(sp.toString());
 
-    window.setTimeout(() => {
-      setAddedId((cur) => (cur === p.id ? null : cur));
-    }, 1500);
-  }
-
-  async function handleAddToCart(e: React.MouseEvent, p: Product) {
-    e.preventDefault();
-    e.stopPropagation();
-    if (p.stock <= 0) return;
-
-    if (!user?.email) {
-      openModal(async () => {
-        await doAddToCart(p);
+      Object.entries(next).forEach(([k, v]) => {
+        if (!v || v === "all" || v === "") qs.delete(k);
+        else qs.set(k, v);
       });
+
+      // reset pagination on filter changes
+      if (
+        next.category !== undefined ||
+        next.sort !== undefined ||
+        next.search !== undefined
+      ) {
+        qs.delete("page");
+      }
+
+      router.push(`${pathname}${qs.toString() ? `?${qs.toString()}` : ""}`);
+    },
+    [sp, router, pathname]
+  );
+
+  // --- 5) DATA HELPERS ---
+  const loadCategories = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("categories")
+      .select("id,name,slug")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("[categories] load error:", error.message);
       return;
     }
 
-    await doAddToCart(p);
-  }
+    if (data && isMountedRef.current) setLocalCategories(data as any);
+  }, [supabase]);
 
+  const safeRefresh = useCallback(() => {
+    if (typeof document !== "undefined" && document.visibilityState !== "visible")
+      return;
+    if (!isMountedRef.current || isPending || syncing) return;
+
+    if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+
+    refreshTimeoutRef.current = setTimeout(() => {
+      if (!isMountedRef.current) return;
+
+      setSyncing(true);
+      startTransition(() => {
+        router.refresh();
+
+        setTimeout(() => {
+          if (!isMountedRef.current) return;
+
+          setSyncing(false);
+
+          // ✅ if the "adminAdding" badge is shown, hide it shortly after refresh ends
+          if (adminAddingTimerRef.current) clearTimeout(adminAddingTimerRef.current);
+          adminAddingTimerRef.current = setTimeout(() => {
+            if (isMountedRef.current) setAdminAdding(false);
+          }, 600);
+        }, 1200);
+      });
+    }, 600);
+  }, [router, isPending, syncing]);
+
+  // --- 6) REALTIME (hook stays) ---
+  useResilientRealtime(
+    `prod-${sessionId}`,
+    { event: "*", schema: "public", table: "products" },
+    safeRefresh,
+    {
+      enabled: mounted,
+      resubscribeIntervalMs: 60_000,
+      syncAuthToRealtime: true,
+    }
+  );
+
+  useResilientRealtime(
+    `cat-${sessionId}`,
+    { event: "*", schema: "public", table: "categories" },
+    loadCategories,
+    {
+      enabled: mounted,
+      resubscribeIntervalMs: 60_000,
+      syncAuthToRealtime: true,
+    }
+  );
+
+  // ✅ Option A: listen specifically for INSERT events and show a lightweight loading badge
+  useEffect(() => {
+    if (!mounted) return;
+
+    const ch = supabase
+      .channel(`prod-insert-${sessionId}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "products" },
+        () => {
+          setAdminAdding(true);
+
+          // keep the badge visible long enough to be noticed (prevents flicker)
+          if (adminAddingTimerRef.current) clearTimeout(adminAddingTimerRef.current);
+          adminAddingTimerRef.current = setTimeout(() => {
+            if (isMountedRef.current) setAdminAdding(false);
+          }, 4000);
+
+          safeRefresh();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [mounted, supabase, sessionId, safeRefresh]);
+
+  // --- 7) CART ACTIONS ---
+  const doAddToCart = useCallback(
+    async (p: Product) => {
+      if (p.stock <= 0 || loadingId === p.id) return;
+
+      setLoadingId(p.id);
+      await new Promise((r) => setTimeout(r, 250));
+
+      addToCart(
+        {
+          id: p.id,
+          slug: p.slug,
+          name: p.name,
+          price: p.price,
+          image: p.image_signed_url || "/placeholder-product.png",
+          stock: p.stock,
+        },
+        1
+      );
+
+      setLoadingId(null);
+      setAddedId(p.id);
+
+      setTimeout(() => {
+        if (isMountedRef.current) setAddedId(null);
+      }, 1200);
+    },
+    [addToCart, loadingId]
+  );
+
+  const handleAddToCart = useCallback(
+    async (e: React.MouseEvent<HTMLButtonElement>, p: Product) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (p.stock <= 0) return;
+
+      if (!user?.email) {
+        openModal(async () => {
+          await doAddToCart(p);
+        });
+        return;
+      }
+
+      await doAddToCart(p);
+    },
+    [user?.email, openModal, doAddToCart]
+  );
+
+  // --- 8) MEMO ---
   const categoryItems = useMemo(
     () => [{ id: "all", name: "All Products", slug: "all" }, ...localCategories],
     [localCategories]
   );
 
-  function setQuery(next: Record<string, string | undefined>) {
-    const qs = new URLSearchParams(sp.toString());
+  const activeCategory = selectedCategory || "all";
 
-    Object.entries(next).forEach(([k, v]) => {
-      if (!v || v === "all" || v === "") qs.delete(k);
-      else qs.set(k, v);
-    });
-
-    if (next.category !== undefined || next.sort !== undefined || next.search !== undefined) {
-      qs.delete("page");
-    }
-
-    router.push(`${pathname}${qs.toString() ? `?${qs.toString()}` : ""}`);
+  // --- 9) UI FALLBACK ---
+  if (!mounted) {
+    return (
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-6">
+        <div className="h-8 w-44 rounded bg-muted animate-pulse" />
+        <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div
+              key={i}
+              className="h-56 rounded-2xl border bg-background animate-pulse"
+            />
+          ))}
+        </div>
+      </div>
+    );
   }
 
+  // --- 10) RENDER ---
   return (
-    <div className="mx-auto max-w-7xl">
-      {/* Top bar */}
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-6">
+      {/* Header */}
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Products</h1>
-          {search ? (
-            <p className="mt-1 text-sm text-muted-foreground">
-              Showing results for{" "}
-              <span className="font-medium text-foreground">{search}</span>
+          <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+            Products
+          </h1>
+          <div className="flex items-center gap-2 mt-1">
+            <p className="text-sm text-muted-foreground">
+              Find the best smartphones.
             </p>
-          ) : (
-            <p className="mt-1 text-sm text-muted-foreground">
-              Find the best smartphones for your needs.
-            </p>
-          )}
 
-          {(syncing || isPending) ? (
-            <p className="mt-2 text-xs text-muted-foreground">Syncing realtime…</p>
-          ) : null}
+            {(syncing || isPending) && (
+              <Badge
+                variant="outline"
+                className="animate-pulse text-[10px] py-0 h-5"
+              >
+                Syncing...
+              </Badge>
+            )}
+
+            {adminAdding && (
+              <Badge
+                variant="outline"
+                className="animate-pulse text-[10px] py-0 h-5"
+              >
+                New product detected... updating
+              </Badge>
+            )}
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="hidden sm:flex items-center gap-2 text-sm text-muted-foreground">
-            <ArrowUpDown className="h-4 w-4" />
-            Sort
-          </div>
-
-          {mounted ? (
-            <Select value={sort || "name_asc"} onValueChange={(v) => setQuery({ sort: v })}>
-              <SelectTrigger className="w-50 rounded-full">
-                <SelectValue placeholder="Sort by" />
+        {/* Controls */}
+        <div className="flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-end">
+          {/* Mobile/Tablet category */}
+          <div className="lg:hidden">
+            <Select
+              value={activeCategory}
+              onValueChange={(v) => setQuery({ category: v })}
+            >
+              <SelectTrigger className="w-full sm:w-[220px] rounded-full">
+                <SelectValue placeholder="Category" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="name_asc">Name A–Z</SelectItem>
-                <SelectItem value="price_asc">Price Low to High</SelectItem>
-                <SelectItem value="price_desc">Price High to Low</SelectItem>
+                {categoryItems.map((c) => (
+                  <SelectItem key={c.id} value={c.slug}>
+                    {c.name}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
-          ) : (
-            <div className="h-10 w-50 rounded-full border" />
-          )}
+          </div>
+
+          <Select
+            value={sort || "name_asc"}
+            onValueChange={(v) => setQuery({ sort: v })}
+          >
+            <SelectTrigger className="w-full sm:w-[220px] rounded-full">
+              <SelectValue placeholder="Sort by" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="name_asc">Name A–Z</SelectItem>
+              <SelectItem value="price_asc">Price: Low to High</SelectItem>
+              <SelectItem value="price_desc">Price: High to Low</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
-        {/* Sidebar desktop */}
+      {/* Layout */}
+      <div className="grid gap-5 lg:gap-6 lg:grid-cols-[260px_1fr]">
+        {/* Desktop sidebar */}
         <aside className="hidden lg:block">
           <div className="rounded-2xl border bg-background p-4 sticky top-24">
-            <div className="mb-3 flex items-center justify-between">
-              <div className="text-sm font-semibold">Category</div>
-              <Badge variant="secondary" className="rounded-full text-black">
-                {categoryItems.length - 1}
-              </Badge>
-            </div>
-
+            <div className="text-sm font-semibold mb-3">Categories</div>
             <div className="space-y-1">
               {categoryItems.map((c) => {
-                const active = (selectedCategory || "all") === c.slug;
-
-                const qs = new URLSearchParams();
-                if (search) qs.set("search", search);
-                if (sort) qs.set("sort", sort);
-                if (c.slug !== "all") qs.set("category", c.slug);
-
-                const href = `/products${qs.toString() ? `?${qs.toString()}` : ""}`;
-
+                const active = activeCategory === c.slug;
                 return (
-                  <Link
+                  <button
                     key={c.id}
-                    href={href}
-                    className={[
-                      "group flex items-center justify-between rounded-xl px-3 py-2 text-sm transition text-black",
+                    onClick={() => setQuery({ category: c.slug })}
+                    className={cn(
+                      "flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm transition",
                       active
-                        ? "bg-muted text-foreground font-medium"
-                        : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-                    ].join(" ")}
+                        ? "bg-muted font-medium text-primary"
+                        : "text-muted-foreground hover:bg-muted/50"
+                    )}
                   >
-                    <span>{c.name}</span>
-                    {active ? <CheckCircle2 className="h-4 w-4 text-black" /> : null}
-                  </Link>
+                    {c.name}
+                    {active && <CheckCircle2 className="h-4 w-4" />}
+                  </button>
                 );
               })}
             </div>
           </div>
         </aside>
 
-        {/* Main */}
+        {/* Products */}
         <section>
-          {/* Mobile category pills */}
-          <div className="mb-4 flex gap-2 overflow-x-auto lg:hidden pb-1">
-            {categoryItems.map((c) => {
-              const active = (selectedCategory || "all") === c.slug;
-              return (
-                <Button
-                  key={c.id}
-                  size="sm"
-                  variant={active ? "default" : "outline"}
-                  onClick={() => setQuery({ category: c.slug })}
-                  className="shrink-0 rounded-full text-black"
-                >
-                  {c.name}
-                </Button>
-              );
-            })}
-          </div>
-
           {localProducts.length === 0 ? (
-            <div className="rounded-2xl border bg-background p-10 text-center">
-              <div className="text-base font-semibold">Products not found</div>
-              <div className="mt-1 text-sm text-muted-foreground">
-                We couldn&apos;t find any products matching your criteria.
-              </div>
-              <div className="mt-6 flex justify-center gap-2">
-                <Button
-                  variant="outline"
-                  className="text-black"
-                  onClick={() => setQuery({ search: "" })}
-                >
-                  Reset search
-                </Button>
-                <Button
-                  variant="outline"
-                  className="text-black"
-                  onClick={() => setQuery({ category: "all" })}
-                >
-                  All Categories
-                </Button>
-              </div>
+            <div className="rounded-3xl border border-dashed p-10 sm:p-16 text-center">
+              <p className="text-muted-foreground">No products found.</p>
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-              {localProducts.map((p, idx) => {
-                const src = p.image_signed_url ?? "/placeholder-product.png";
-                const out = p.stock <= 0;
-
-                const isLoading = loadingId === p.id;
-                const isAdded = addedId === p.id;
-
-                return (
-                  <div
-                    key={p.id}
-                    className="group rounded-2xl border bg-background overflow-hidden hover:shadow-sm transition"
+            <div className="grid gap-3 sm:gap-4 grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
+              {localProducts.map((p, index) => (
+                <div
+                  key={p.id}
+                  className="group relative flex flex-col rounded-2xl border bg-background p-2 sm:p-3 transition-all hover:shadow-md"
+                >
+                  <Link
+                    href={`/product/${p.slug}`}
+                    className="relative aspect-square overflow-hidden rounded-xl bg-muted"
                   >
-                    <Link href={`/product/${p.slug}`} className="block">
-                      <div className="relative aspect-4/5 w-full bg-muted">
-                        <Image
-                          src={src}
-                          alt={p.name}
-                          fill
-                          className={[
-                            "object-cover transition-transform duration-300",
-                            "group-hover:scale-[1.03]",
-                            out ? "opacity-70" : "",
-                          ].join(" ")}
-                          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
-                          priority={idx < 4}
-                        />
-
-                        <div className="absolute left-3 top-3 flex flex-col gap-2">
-                          {out ? (
-                            <Badge className="rounded-full" variant="destructive">
-                              Sold out
-                            </Badge>
-                          ) : (
-                            <Badge className="rounded-full" variant="secondary">
-                              <Tag className="mr-1 h-3.5 w-3.5" />
-                              Ready
-                            </Badge>
-                          )}
-                        </div>
-
-                        <div className="absolute inset-x-0 bottom-0 h-16 bg-linear-to-t from-background/90 to-transparent" />
+                    <Image
+                      src={p.image_signed_url || "/placeholder-product.png"}
+                      alt={p.name}
+                      fill
+                      priority={index < 4}
+                      sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+                      className="object-cover transition-transform group-hover:scale-105"
+                    />
+                    {p.stock <= 0 && (
+                      <div className="absolute inset-0 bg-background/60 flex items-center justify-center">
+                        <Badge variant="destructive">Sold Out</Badge>
                       </div>
+                    )}
+                  </Link>
 
-                      <div className="p-3">
-                        <div className="text-[11px] text-muted-foreground">{p.brand}</div>
-                        <div className="mt-1 line-clamp-2 text-sm font-medium leading-snug">
-                          {p.name}
-                        </div>
-                        <div className="mt-3 text-base font-semibold">Rp {formatIDR(p.price)}</div>
-                      </div>
-                    </Link>
+                  <div className="flex flex-1 flex-col pt-2 sm:pt-3">
+                    <h3 className="line-clamp-1 text-sm sm:text-[15px] font-medium">
+                      {p.name}
+                    </h3>
 
-                    <div className="px-3 pb-3">
-                      <div className="grid grid-cols-2 gap-2">
-                        <Button
-                          size="sm"
-                          className={cn(
-                            "rounded-xl transition-all duration-300",
-                            isAdded
-                              ? "bg-green-600 text-white hover:bg-green-600"
-                              : "bg-primary text-primary-foreground hover:bg-primary/90"
-                          )}
-                          onClick={(e) => handleAddToCart(e, p)}
-                          disabled={isLoading || out}
-                        >
-                          {isLoading ? (
-                            <div className="flex items-center gap-2">
-                              <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                              Adding...
-                            </div>
-                          ) : isAdded ? (
-                            <div className="flex items-center gap-2">
-                              <Check className="h-4 w-4" />
-                              Add
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-2">
-                              <ShoppingCart className="h-4 w-4" />
-                              {out ? "Out Of Stock" : "Add"}
-                            </div>
-                          )}
-                        </Button>
+                    <p className="mt-1 text-base sm:text-lg font-bold text-primary">
+                      Rp {formatIDR(p.price)}
+                    </p>
 
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="rounded-xl text-black"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            router.push(`/product/${p.slug}`);
-                          }}
-                        >
-                          Detail
-                        </Button>
-                      </div>
+                    <div className="mt-auto pt-3 flex gap-2">
+                      <Button
+                        size="sm"
+                        className={cn(
+                          "flex-1 rounded-xl transition-all duration-300 h-10 sm:h-9",
+                          addedId === p.id
+                            ? "bg-green-600 text-white hover:bg-green-600"
+                            : "bg-primary text-primary-foreground hover:bg-primary/90"
+                        )}
+                        onClick={(e) => handleAddToCart(e, p)}
+                        disabled={loadingId === p.id || p.stock <= 0}
+                      >
+                        {loadingId === p.id ? (
+                          <div className="flex items-center gap-2">
+                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                            <span>Adding...</span>
+                          </div>
+                        ) : addedId === p.id ? (
+                          <div className="flex items-center gap-2">
+                            <Check className="h-4 w-4" />
+                            <span>Add</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <ShoppingCart className="h-4 w-4" />
+                            <span>{p.stock <= 0 ? "Out of stock" : "Add"}</span>
+                          </div>
+                        )}
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="rounded-xl flex-1 h-10 sm:h-9"
+                        asChild
+                      >
+                        <Link href={`/product/${p.slug}`}>Details</Link>
+                      </Button>
                     </div>
                   </div>
-                );
-              })}
+                </div>
+              ))}
             </div>
           )}
-
-          {/* Pagination */}
-          <div className="mt-10 flex items-center justify-center gap-2">
-            <Button
-              variant="outline"
-              className="rounded-full"
-              disabled={page <= 1}
-              onClick={() => setQuery({ page: String(page - 1) })}
-            >
-              Prev
-            </Button>
-            <div className="text-sm text-muted-foreground">Page {page}</div>
-            <Button
-              variant="outline"
-              className="rounded-full"
-              onClick={() => setQuery({ page: String(page + 1) })}
-            >
-              Next
-            </Button>
-          </div>
         </section>
       </div>
     </div>

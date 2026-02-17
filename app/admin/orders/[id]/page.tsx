@@ -1,19 +1,18 @@
 import AdminOrderClient from "./ui";
 import { createSupabaseServer } from "@/lib/supabase/server";
 
-const BUCKET = "product-images"; // <-- sesuaikan nama bucket kamu
-const SIGN_EXPIRES_IN = 60 * 10; // 10 menit
+const BUCKET = "product-images";
+const SIGN_EXPIRES_IN = 60 * 10;
 
 async function signOrderItemImages(supabase: any, items: any[]) {
   return await Promise.all(
     (items ?? []).map(async (it) => {
-      const path = it?.product?.image_url ?? null; // PATH di bucket (mis: "products/abc.jpg")
+      const path = it?.product?.image_url ?? null;
 
       if (!path || typeof path !== "string") {
         return { ...it, image_signed_url: null };
       }
 
-      // kalau sudah absolute URL
       if (path.startsWith("http://") || path.startsWith("https://")) {
         return { ...it, image_signed_url: path };
       }
@@ -37,7 +36,7 @@ export default async function AdminOrderDetailPage({
 }: {
   params: Promise<{ id?: string }>;
 }) {
-  // ✅ unwrap params promise (Next 16)
+
   const { id } = await params;
 
   if (!id || id === "undefined") {

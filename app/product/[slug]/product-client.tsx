@@ -9,13 +9,14 @@ import { cn } from "@/lib/utils";
 import { Heart, Minus, Plus, Share2, ShoppingCart, Star } from "lucide-react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { Product } from "@/lib/db/products";
 import { useCartStore } from "@/stores/cart.store";
 import { createSupabaseBrowser } from "@/lib/supabase/client";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { useAuthModalStore } from "@/stores/auth-modal.store";
 import { toast } from "sonner";
+import { useResilientRealtime } from "@/hooks/useResilientRealtime";
 
 const formatIDR = (n: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR" }).format(n);
@@ -34,13 +35,15 @@ export default function ProductClient({
   relatedProducts: Product[];
 }) {
   const router = useRouter();
+  const [isPending, startTransition] = useTransition();
 
   const addToCart = useCartStore((s) => s.addToCart);
   const setStockInCart = useCartStore((s) => s.setStock);
 
-  const supabase = useMemo(() => createSupabaseBrowser(), []);
+  // Optional (your hook already creates its own client)
+  useMemo(() => createSupabaseBrowser(), []);
 
-  const productId = product.id; // stable per render
+  const productId = product.id;
   const productIdRef = useRef(productId);
   productIdRef.current = productId;
 
@@ -49,6 +52,10 @@ export default function ProductClient({
   const [isLiked, setIsLiked] = useState(false);
 
   const [stock, setStock] = useState(product.stock ?? 0);
+  const stockRef = useRef(stock);
+  useEffect(() => {
+    stockRef.current = stock;
+  }, [stock]);
 
   const [imgLoaded, setImgLoaded] = useState(false);
   const { isAuthed, loading: authLoading } = useAuthUser();
@@ -56,201 +63,116 @@ export default function ProductClient({
 
   const outOfStock = stock <= 0;
   const imgSrc = useMemo(() => product.image_signed_url ?? null, [product.image_signed_url]);
-  
 
   useEffect(() => {
+    // reset state when changing product
     setImgLoaded(false);
-  }, [productId]);
+    setQuantity(1);
+    setStock(product.stock ?? 0);
+  }, [productId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // sync dari props (kalau server refresh)
-  useEffect(() => {
-    let t: any = null;
+  // ✅ Realtime config: listen UPDATE + DELETE + INSERT (if you ever re-create row)
+  const realtimeConfig = useMemo(
+    () => ({
+      event: "*" as const,
+      schema: "public",
+      table: "products",
+      filter: `id=eq.${productId}`,
+    }),
+    [productId]
+  );
 
-    const softRefresh = () => {
-      if (t) clearTimeout(t);
-      t = setTimeout(() => router.refresh(), 250);
-    };
+  useResilientRealtime(
+    `product-detail-${productId}`,
+    realtimeConfig,
+    (payload) => {
+      // Helpful for debugging:
+      // console.log("[product rt]", payload.eventType, payload.new, payload.old);
 
-    let channel: any = null;
-    let authSub: any = null;
-    let cancelled = false;
-
-    const makeChannel = () =>
-      supabase
-        .channel(`product-detail-${productId}`)
-        .on(
-          "postgres_changes",
-          { event: "UPDATE", schema: "public", table: "products", filter: `id=eq.${productId}` },
-          (payload) => {
-            const next = payload.new as any;
-            const prev = payload.old as any;
-
-            // ✅ stock realtime
-            const nextStock = toNum(next?.stock);
-            if (nextStock !== null) {
-              setStock(nextStock);
-              setQuantity((q) => Math.max(1, Math.min(q, Math.max(1, nextStock))));
-              setStockInCart(productIdRef.current, nextStock);
-            }
-
-            // ✅ field lain -> refresh server (signed url, name, price, image, etc)
-            const changedNonStock =
-              (typeof next?.name === "string" && next?.name !== prev?.name) ||
-              (toNum(next?.price) !== null && toNum(next?.price) !== toNum(prev?.price)) ||
-              (next?.brand ?? null) !== (prev?.brand ?? null) ||
-              (next?.description ?? null) !== (prev?.description ?? null) ||
-              (next?.image_url ?? null) !== (prev?.image_url ?? null) ||
-              (typeof next?.is_active === "boolean" && next?.is_active !== prev?.is_active);
-
-            if (changedNonStock) softRefresh();
-          }
-        )
-        .on(
-          "postgres_changes",
-          { event: "DELETE", schema: "public", table: "products", filter: `id=eq.${productId}` },
-          () => {
-            router.replace("/products");
-            router.refresh();
-          }
-        )
-        .subscribe((status: string) => {
-          console.log("[product detail] status:", status);
-        });
-
-    const start = async () => {
-      // 1) tunggu session siap
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-
-      if (token) {
-        // 2) inject token ke realtime sebelum subscribe
-        supabase.realtime.setAuth(token);
-        channel = makeChannel();
-      } else {
-        console.log("[product detail] NO_SESSION (skip subscribe)");
+      // If product deleted by admin -> redirect user out
+      if (payload?.eventType === "DELETE") {
+        toast.error("Product is no longer available");
+        router.replace("/products");
+        return;
       }
 
-      // 3) kalau token berubah (login / refresh token / logout) -> resubscribe
-      authSub = supabase.auth.onAuthStateChange((_evt: any, session: any) => {
-        if (cancelled) return;
+      // We only care about UPDATE / INSERT for data refresh
+      if (payload?.eventType !== "UPDATE" && payload?.eventType !== "INSERT") return;
 
-        const tok = session?.access_token;
+      const next = payload?.new;
+      if (!next?.id) return;
+      if (String(next.id) !== productIdRef.current) return;
 
-        if (!tok) {
-          if (channel) supabase.removeChannel(channel);
-          channel = null;
-          console.log("[product detail] NO_SESSION (unsubscribed)");
-          return;
-        }
+      // --- Stock updates (NO stale closure) ---
+      const nextStock = toNum(next?.stock);
+      if (nextStock !== null) {
+        setStock((prevStock) => {
+          if (prevStock === nextStock) return prevStock;
 
-        supabase.realtime.setAuth(tok);
+          // clamp qty to new stock
+          setQuantity((q) => Math.max(1, Math.min(q, nextStock)));
 
-        if (channel) supabase.removeChannel(channel);
-        channel = makeChannel();
-      });
-    };
+          // sync stock into cart store (important)
+          setStockInCart(productIdRef.current, nextStock);
 
-    start();
+          return nextStock;
+        });
+      }
 
-    return () => {
-      cancelled = true;
-      if (t) clearTimeout(t);
-      if (channel) supabase.removeChannel(channel);
-      authSub?.data?.subscription?.unsubscribe?.();
-    };
-  }, [supabase, productId, router, setStockInCart]);
+      // --- Visual changes -> refresh server data ---
+      // payload.old can be empty depending on your replica settings.
+      const prev = payload?.old ?? {};
+      const changedVisual =
+        (next as any)?.price !== (prev as any)?.price ||
+        (next as any)?.name !== (prev as any)?.name ||
+        (next as any)?.image_url !== (prev as any)?.image_url;
 
-  // ✅ Realtime: UPDATE stock harus langsung berubah TANPA refresh
-  useEffect(() => {
-    let t: any = null;
-    const softRefresh = () => {
-      if (t) clearTimeout(t);
-      t = setTimeout(() => router.refresh(), 250);
-    };
+      if (changedVisual) {
+        startTransition(() => router.refresh());
+      }
+    },
+    {
+      enabled: true,
+      resubscribeIntervalMs: 60_000,
+      syncAuthToRealtime: true,
+    }
+  );
 
-    const channel = supabase
-      .channel(`product-detail-${productId}`)
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "products", filter: `id=eq.${productId}` },
-        (payload) => {
+  // --- HANDLERS ---
 
-
-          const next = payload.new as any;
-          const prev = payload.old as any;
-
-          // ✅ stock realtime
-          const nextStock = toNum(next?.stock);
-          if (nextStock !== null) {
-            setStock(nextStock);
-            setQuantity((q) => Math.max(1, Math.min(q, Math.max(1, nextStock))));
-            setStockInCart(productIdRef.current, nextStock);
-          }
-
-          // ✅ field lain -> refresh server (signed url, name, price, image, etc)
-          const changedNonStock =
-            (typeof next?.name === "string" && next?.name !== prev?.name) ||
-            (toNum(next?.price) !== null && toNum(next?.price) !== toNum(prev?.price)) ||
-            (next?.brand ?? null) !== (prev?.brand ?? null) ||
-            (next?.description ?? null) !== (prev?.description ?? null) ||
-            (next?.image_url ?? null) !== (prev?.image_url ?? null) ||
-            (typeof next?.is_active === "boolean" && next?.is_active !== prev?.is_active);
-
-          if (changedNonStock) softRefresh();
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "DELETE", schema: "public", table: "products", filter: `id=eq.${productId}` },
-        () => {
-          router.replace("/products");
-          router.refresh();
-        }
-      )
-      .subscribe((status) => {
-        console.log("[product detail] status:", status);
-      });
-
-    return () => {
-      if (t) clearTimeout(t);
-      supabase.removeChannel(channel);
-    };
-  }, [supabase, productId, router]);
+  const handleQuantityChange = (type: "increment" | "decrement") => {
+    if (type === "increment") setQuantity((prev) => Math.min(prev + 1, Math.max(1, stockRef.current)));
+    if (type === "decrement") setQuantity((prev) => Math.max(1, prev - 1));
+  };
 
   const handleAddToCart = async () => {
-    if (stock <= 0) return;
+    if (stockRef.current <= 0) return;
 
-    const doAction = async () => {
+    const action = async () => {
       setIsAdding(true);
-      await new Promise((resolve) => setTimeout(resolve, 250));
-
-      const safeQty = Math.max(1, Math.min(quantity, stock));
+      await new Promise((r) => setTimeout(r, 300));
 
       addToCart(
         {
-          id: productId,
+          id: productIdRef.current,
           name: product.name,
           price: product.price,
-          image: imgSrc ?? "",
-          stock,
+          image: product.image_signed_url ?? "",
+          stock: stockRef.current,
           slug: product.slug,
         },
-        safeQty
+        quantity
       );
 
       setIsAdding(false);
-      toast.success("This product has been added to cart")
-      setTimeout(() => 1600);
+      toast.success("Added to cart!");
     };
 
     if (!isAuthed) {
-      openAuthModal(async () => {
-        await doAction();
-      });
-      return;
+      openAuthModal(action);
+    } else {
+      await action();
     }
-
-    await doAction();
   };
 
   const handleBuyNow = async () => {
@@ -258,13 +180,14 @@ export default function ProductClient({
     setTimeout(() => router.push("/cart"), 250);
   };
 
-  const handleQuantityChange = (type: "increment" | "decrement") => {
-    if (type === "increment") setQuantity((prev) => Math.min(prev + 1, Math.max(1, stock)));
-    if (type === "decrement") setQuantity((prev) => Math.max(1, prev - 1));
-  };
-
   return (
     <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      {isPending && (
+        <div className="fixed top-20 right-8 z-50 bg-primary text-white text-[10px] px-2 py-1 rounded-full animate-pulse">
+          Updating price/details...
+        </div>
+      )}
+
       <ProductBreadcrumb />
 
       <div className="grid lg:grid-cols-2 gap-10 lg:gap-14 mb-16">
@@ -333,9 +256,7 @@ export default function ProductClient({
           </div>
 
           <div className="flex items-baseline gap-3">
-            <span className="text-3xl font-bold text-foreground">
-              {formatIDR(product.price)}
-            </span>
+            <span className="text-3xl font-bold text-foreground">{formatIDR(product.price)}</span>
           </div>
 
           {product.description ? (
@@ -363,9 +284,7 @@ export default function ProductClient({
                     <Minus className="h-4 w-4" />
                   </Button>
 
-                  <span className="px-4 py-2 min-w-16 text-center font-medium">
-                    {quantity}
-                  </span>
+                  <span className="px-4 py-2 min-w-16 text-center font-medium">{quantity}</span>
 
                   <Button
                     variant="ghost"
@@ -403,20 +322,13 @@ export default function ProductClient({
                 variant="ghost"
                 size="sm"
                 onClick={() => setIsLiked(!isLiked)}
-                className={cn(
-                  "text-muted-foreground hover:text-black",
-                  isLiked && "text-destructive"
-                )}
+                className={cn("text-muted-foreground hover:text-black", isLiked && "text-destructive")}
               >
                 <Heart className={cn("h-4 w-4 mr-2", isLiked && "fill-current")} />
                 Wishlist
               </Button>
 
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-muted-foreground hover:text-foreground"
-              >
+              <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
                 <Share2 className="h-4 w-4 mr-2" />
                 Share
               </Button>

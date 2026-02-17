@@ -3,6 +3,7 @@ import {
   fetchMyCart,
   setCartItemQty,
   removeCartItem,
+  clearMyCart,
 } from "@/lib/cart/cart.service";
 
 /**
@@ -29,10 +30,7 @@ export async function POST(req: Request) {
     const { productId, qty } = body ?? {};
 
     if (!productId || typeof qty !== "number") {
-      return NextResponse.json(
-        { message: "INVALID_BODY" },
-        { status: 400 }
-      );
+      return NextResponse.json({ message: "INVALID_BODY" }, { status: 400 });
     }
 
     await setCartItemQty(productId, qty);
@@ -45,21 +43,20 @@ export async function POST(req: Request) {
 }
 
 /**
- * DELETE /api/cart?productId=xxx
+ * DELETE /api/cart?productId=xxx  -> remove 1 item
+ * DELETE /api/cart               -> clear all items
  */
 export async function DELETE(req: Request) {
   try {
     const url = new URL(req.url);
     const productId = url.searchParams.get("productId");
 
-    if (!productId) {
-      return NextResponse.json(
-        { message: "MISSING_PRODUCT_ID" },
-        { status: 400 }
-      );
+    if (productId) {
+      await removeCartItem(productId);
+      return NextResponse.json({ ok: true });
     }
 
-    await removeCartItem(productId);
+    await clearMyCart();
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     const msg = e?.message ?? "ERROR";

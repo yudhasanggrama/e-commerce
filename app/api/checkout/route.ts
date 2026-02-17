@@ -9,20 +9,10 @@ import { createMidtransSnap } from "@/lib/midtrans";
 
 type CartItemInput = { product_id: string; quantity: number };
 
-type ProductRow = {
-  id: string;
-  name: string;
-  price: number;
-  stock: number;
-  image_url: string | null;
-  is_active: boolean;
-};
-
 export async function POST(req: Request) {
   try {
     const supabase = await createSupabaseServer();
-    const { data: userRes, error: userErr } = await supabase.auth.getUser();
-    const user = userRes.user;
+    const { data: { user }, error: userErr } = await supabase.auth.getUser();
 
     if (userErr || !user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -36,81 +26,64 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Cart is empty" }, { status: 400 });
     }
 
-    // Service role buat read products + read profile (kalau RLS ketat)
     const service = createSupabaseService();
-
-    // Ambil profile (optional)
-    const { data: profile } = await service
-      .from("profiles")
-      .select("full_name")
-      .eq("id", user.id)
-      .maybeSingle();
-
     const productIds = items.map((i) => i.product_id);
 
-    const { data: productsRaw, error: prodErr } = await service
-      .from("products")
-      .select("id,name,price,stock,image_url,is_active")
-      .in("id", productIds);
+    // 1. Ambil data produk terbaru & Profile secara paralel
+    const [productsRes, profileRes] = await Promise.all([
+      service
+        .from("products")
+        .select("id, name, price, stock, image_url, is_active")
+        .in("id", productIds),
+      service
+        .from("profiles")
+        .select("full_name")
+        .eq("id", user.id)
+        .maybeSingle()
+    ]);
 
-    if (prodErr) throw prodErr;
+    if (productsRes.error) throw productsRes.error;
+    
+    const products = productsRes.data ?? [];
+    const productMap = new Map(products.map((p) => [p.id, p]));
 
-    const products = (productsRaw ?? []) as ProductRow[];
-    const map = new Map(products.map((p) => [p.id, p]));
-
-    // Validasi item + stok (cek stok sekarang, tapi belum “reserve”)
-    for (const it of items) {
-      const p = map.get(it.product_id);
-      if (!p || !p.is_active) {
-        return NextResponse.json(
-          { error: "Product inactive/not found" },
-          { status: 400 }
-        );
-      }
-      if (!Number.isFinite(it.quantity) || it.quantity <= 0) {
-        return NextResponse.json({ error: "Invalid quantity" }, { status: 400 });
-      }
-      if (p.stock < it.quantity) {
-        return NextResponse.json(
-          { error: `Stock not enough: ${p.name}` },
-          { status: 400 }
-        );
-      }
-    }
-
-    // Hitung subtotal (server-side)
+    // 2. Validasi stok & Inactive products
     let subtotal = 0;
-    for (const it of items) {
-      const p = map.get(it.product_id)!;
-      subtotal += p.price * it.quantity;
+    for (const item of items) {
+      const p = productMap.get(item.product_id);
+      if (!p || !p.is_active) {
+        return NextResponse.json({ error: `Product ${p?.name || 'unknown'} is no longer available` }, { status: 400 });
+      }
+      if (p.stock < item.quantity) {
+        return NextResponse.json({ error: `Insufficient stock for ${p.name}. Available: ${p.stock}` }, { status: 400 });
+      }
+      subtotal += p.price * item.quantity;
     }
 
     const shippingFee = subtotal > 500_000 ? 0 : 25_000;
     const total = subtotal + shippingFee;
 
-    // 1) Create order (PENDING) — stok belum berkurang
-    const { data: orderIns, error: orderErr } = await supabase
+    // 3. Insert Order & Order Items dalam satu alur
+    // Tips: Gunakan rpc jika ingin memastikan stok berkurang saat ini juga (reserve stock)
+    const { data: order, error: orderErr } = await supabase
       .from("orders")
       .insert({
         user_id: user.id,
         status: "pending",
-        payment_status: "unpaid", 
+        payment_status: "unpaid",
         subtotal,
         shipping_fee: shippingFee,
         total,
-        paid_at: null,
       })
       .select("id")
       .single();
 
     if (orderErr) throw orderErr;
-    const orderId = orderIns.id as string;
 
-    // 2) Insert order_items
     const orderItems = items.map((it) => {
-      const p = map.get(it.product_id)!;
+      const p = productMap.get(it.product_id)!;
       return {
-        order_id: orderId,
+        order_id: order.id,
         product_id: p.id,
         name: p.name,
         price: p.price,
@@ -119,40 +92,34 @@ export async function POST(req: Request) {
       };
     });
 
-    const { error: itemsErr } = await supabase
-      .from("order_items")
-      .insert(orderItems);
+    const { error: itemsErr } = await supabase.from("order_items").insert(orderItems);
 
     if (itemsErr) {
-      // rollback: hapus order kalau gagal insert items
-      await service.from("orders").delete().eq("id", orderId);
+      await service.from("orders").delete().eq("id", order.id); // Rollback
       throw itemsErr;
     }
 
-    // 3) Midtrans Snap (gross_amount harus = total)
-    const providerOrderId = `order-${orderId}`;
-
+    // 4. Integrasi Midtrans
+    const providerOrderId = `order-${order.id}`;
     const snap = await createMidtransSnap({
       providerOrderId,
       grossAmount: total,
       customer: {
-        first_name: String(shipping.name ?? profile?.full_name ?? "Customer")
-          .trim()
-          .split(" ")[0],
-        email: shipping.email ?? user.email ?? "",
-        phone: shipping.phone ?? "",
+        first_name: (shipping.name || profileRes.data?.full_name || "Customer").split(" ")[0],
+        email: shipping.email || user.email || "",
+        phone: shipping.phone || "",
       },
       items: orderItems.map((oi) => ({
-        id: oi.product_id!,
+        id: oi.product_id,
         price: oi.price,
         quantity: oi.quantity,
-        name: oi.name,
+        name: oi.name.substring(0, 50), // Midtrans limit 50 chars
       })),
     });
 
-    // 4) payments row (optional tapi bagus untuk audit)
-    const { error: payErr } = await supabase.from("payments").insert({
-      order_id: orderId,
+    // 5. Audit Payment
+    await supabase.from("payments").insert({
+      order_id: order.id,
       provider: "midtrans",
       provider_order_id: providerOrderId,
       gross_amount: total,
@@ -160,16 +127,16 @@ export async function POST(req: Request) {
       payload: snap,
     });
 
-    if (payErr) throw payErr;
-
     return NextResponse.json({
-      order_id: orderId,
+      order_id: order.id,
       snap_token: snap.token,
       redirect_url: snap.redirect_url,
     });
+
   } catch (e: any) {
+    console.error("Checkout Error:", e);
     return NextResponse.json(
-      { error: e?.message ?? "Checkout failed" },
+      { error: e?.message || "Internal server error" },
       { status: 500 }
     );
   }

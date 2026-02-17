@@ -68,6 +68,7 @@ async function apiSetQty(productId: string, qty: number, price: number) {
     throw new Error(msg);
   }
 }
+
 async function apiRemove(productId: string) {
   const res = await fetch(`/api/cart?productId=${encodeURIComponent(productId)}`, {
     method: "DELETE",
@@ -75,6 +76,16 @@ async function apiRemove(productId: string) {
   });
   if (res.status === 401) throw new Error("LOGIN_REQUIRED");
   if (!res.ok) throw new Error("REMOVE_FAILED");
+}
+
+/** ✅ NEW: clear all items (server-side) */
+async function apiClearCart() {
+  const res = await fetch("/api/cart", {
+    method: "DELETE", // tanpa productId
+    credentials: "include",
+  });
+  if (res.status === 401) throw new Error("LOGIN_REQUIRED");
+  if (!res.ok) throw new Error("CLEAR_CART_FAILED");
 }
 
 export const useCartStore = create<CartState>((set, get) => ({
@@ -128,7 +139,7 @@ export const useCartStore = create<CartState>((set, get) => ({
         if (it.id !== productId) return it;
 
         const safeStock = Math.max(0, stock);
-        const safeQty = Math.min(it.qty, safeStock); // qty jangan lebih dari stock
+        const safeQty = Math.min(it.qty, safeStock);
         return { ...it, stock: safeStock, qty: safeQty };
       }),
     }));
@@ -139,10 +150,12 @@ export const useCartStore = create<CartState>((set, get) => ({
     await get().hydrate();
   },
 
+  /** ✅ clear cart: 1 request, UI langsung kosong */
   clearCart: async () => {
-    const items = get().cart;
-    await Promise.all(items.map((it) => apiRemove(it.id)));
-    await get().hydrate();
+    await apiClearCart();
+    set({ cart: [], hydrated: true });
+    // optional:
+    // await get().hydrate();
   },
 
   itemCount: () => get().cart.reduce((a, c) => a + c.qty, 0),

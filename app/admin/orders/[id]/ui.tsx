@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -10,6 +10,8 @@ import {
   Loader2,
   Truck,
   XCircle,
+  Ban,
+  ShieldCheck,
 } from "lucide-react";
 
 import OrderStatusBadge from "@/components/order/OrderStatusBadge";
@@ -32,7 +34,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-import { createSupabaseBrowser } from "@/lib/supabase/client";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+
+import { useResilientRealtime } from "@/hooks/useResilientRealtime";
+import { OrderStatus, PaymentStatus } from "@/types/order";
 
 function formatIDR(n: number) {
   return new Intl.NumberFormat("id-ID", {
@@ -44,47 +57,88 @@ function formatIDR(n: number) {
 const allowedNext = ["shipped", "completed", "cancelled"] as const;
 type NextStatus = (typeof allowedNext)[number];
 
+type OrderLike = {
+  id: string;
+  status: OrderStatus | string;
+  payment_status: PaymentStatus | string;
+  shipping_fee?: number | null;
+  total?: number | null;
+  created_at?: string | null;
+
+  // cancellation fields
+  cancel_requested?: boolean | null;
+  cancel_reason?: string | null;
+  cancel_requested_at?: string | null;
+};
+
 export default function AdminOrderClient({
   order,
   items,
 }: {
-  order: any;
+  order: OrderLike;
   items: any[];
 }) {
-  const supabase = useMemo(() => createSupabaseBrowser(), []);
   const router = useRouter();
-  const [status, setStatus] = useState(order.status);
-  const [paymentStatus, setPaymentStatus] = useState(order.payment_status);
 
+  const [status, setStatus] = useState<string>(String(order.status));
+  const [paymentStatus, setPaymentStatus] = useState<string>(
+    String(order.payment_status)
+  );
   const [loading, setLoading] = useState(false);
-  useEffect(() => {
-    if (!order?.id) return;
 
-    const ch = supabase
-      .channel(`rt-admin-order-${order.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "orders",
-          filter: `id=eq.${order.id}`,
-        },
-        (payload) => {
-          const next = payload.new as any;
-          if (!next) return;
+  // cancellation state (admin)
+  const [cancelRequested, setCancelRequested] = useState<boolean>(
+    Boolean(order.cancel_requested)
+  );
+  const [cancelReason, setCancelReason] = useState<string | null>(
+    order.cancel_reason ?? null
+  );
 
-          if (typeof next.status === "string") setStatus(next.status);
-          if (typeof next.payment_status === "string")
-            setPaymentStatus(next.payment_status);
-        }
-      )
-      .subscribe((st) => console.log("[admin order realtime] status:", st));
+  const [approveLoading, setApproveLoading] = useState(false);
+  const [approveOpen, setApproveOpen] = useState(false);
 
-    return () => {
-      supabase.removeChannel(ch);
-    };
-  }, [supabase, order?.id]);
+  const orderId = String(order?.id ?? "");
+  const rtEnabled = Boolean(orderId);
+
+  const st = String(status ?? "").toLowerCase();
+  const pay = String(paymentStatus ?? "").toLowerCase();
+
+  const rtConfig = useMemo(
+    () => ({
+      event: "UPDATE" as const,
+      schema: "public",
+      table: "orders",
+      filter: `id=eq.${orderId}`,
+    }),
+    [orderId]
+  );
+
+  useResilientRealtime(
+    `order-detail-${orderId}`,
+    rtConfig,
+    (payload) => {
+      const next = payload?.new;
+      if (!next?.id) return;
+      if (String(next.id) !== orderId) return;
+
+      // ✅ update state by field presence (not truthy)
+      if ("status" in next) setStatus(String(next.status ?? ""));
+      if ("payment_status" in next) setPaymentStatus(String(next.payment_status ?? ""));
+
+      // listen to cancellation fields too
+      if (typeof next?.cancel_requested === "boolean") {
+        setCancelRequested(next.cancel_requested);
+      }
+      if ("cancel_reason" in next) {
+        setCancelReason((next.cancel_reason ?? null) as any);
+      }
+    },
+    {
+      enabled: rtEnabled,
+      resubscribeIntervalMs: 60_000,
+      syncAuthToRealtime: true,
+    }
+  );
 
   const computedSubtotal = useMemo(() => {
     return (items ?? []).reduce(
@@ -94,27 +148,43 @@ export default function AdminOrderClient({
   }, [items]);
 
   async function updateStatus(next: NextStatus) {
-    if (next === status) return;
+    const curStatus = String(status ?? "").toLowerCase();
+    const curPay = String(paymentStatus ?? "").toLowerCase();
+
+    if (String(next).toLowerCase() === curStatus) return;
+
+    // ✅ prevent known 409 conflicts (better UX)
+    if (next === "cancelled" && curPay === "paid") {
+      toast.error("Paid order can't be cancelled here. Use Approve Cancel & Restock.");
+      return;
+    }
+    if (next === "shipped" && curPay !== "paid") {
+      toast.error("Cannot ship unpaid order.");
+      return;
+    }
+    if (next === "cancelled" && (curStatus === "shipped" || curStatus === "completed")) {
+      toast.error("Cannot cancel after shipped/completed.");
+      return;
+    }
 
     setLoading(true);
     const prev = status;
-    setStatus(next); // optimistik
+    setStatus(next);
 
     try {
-      const res = await fetch(`/api/admin/orders/${order.id}/status`, {
+      const res = await fetch(`/api/admin/orders/${orderId}/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: next }),
       });
 
-      let json: any = null;
-      try {
-        json = await res.json();
-      } catch {}
+      const json = await res.json().catch(() => ({}));
 
-      if (!res.ok) throw new Error(json?.error ?? `Failed (${res.status})`);
+      if (!res.ok) {
+        throw new Error(json?.error ?? `Request failed (${res.status})`);
+      }
 
-      setStatus(json.status ?? next);
+      setStatus(String(json.status ?? next));
       toast.success("Order status updated");
     } catch (e: any) {
       setStatus(prev);
@@ -124,11 +194,45 @@ export default function AdminOrderClient({
     }
   }
 
+  const approveDisabled =
+    approveLoading ||
+    !cancelRequested ||
+    pay !== "paid" ||
+    st === "shipped" ||
+    st === "completed" ||
+    st === "cancelled";
+
+  async function approveCancel() {
+    if (approveDisabled) return;
+
+    setApproveLoading(true);
+    try {
+      const res = await fetch("/api/admin/orders/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          order_id: orderId,
+          note: "Approved by admin",
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `Request failed (${res.status})`);
+
+      toast.success("Cancellation approved. Stock restored.");
+      setApproveOpen(false);
+      router.refresh();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Approval failed");
+    } finally {
+      setApproveLoading(false);
+    }
+  }
+
   return (
     <div className="p-4 max-w-3xl mx-auto space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-2">
-          {/* BACK BUTTON: mobile + tablet */}
           <Button
             variant="outline"
             size="icon"
@@ -144,14 +248,14 @@ export default function AdminOrderClient({
           <div>
             <h1 className="text-2xl font-bold">Order Detail</h1>
             <p className="text-sm text-muted-foreground">
-              Manage order status & review items.
+              Manage order status and review items.
             </p>
           </div>
         </div>
 
         <div className="flex flex-col items-end gap-2">
-          <OrderStatusBadge status={status} />
-          <PaymentStatusBadge status={paymentStatus} />
+          <OrderStatusBadge status={status as any} />
+          <PaymentStatusBadge status={paymentStatus as any} />
         </div>
       </div>
 
@@ -159,7 +263,7 @@ export default function AdminOrderClient({
         <CardHeader>
           <CardTitle className="text-base">Summary</CardTitle>
           <CardDescription className="font-mono text-xs break-all">
-            {order.id}
+            {orderId}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
@@ -187,7 +291,9 @@ export default function AdminOrderClient({
           <div className="flex justify-between">
             <span className="text-muted-foreground">Created</span>
             <span className="font-medium">
-              {new Date(order.created_at).toLocaleString("id-ID")}
+              {order.created_at
+                ? new Date(order.created_at).toLocaleString("id-ID")
+                : "-"}
             </span>
           </div>
         </CardContent>
@@ -197,7 +303,6 @@ export default function AdminOrderClient({
         <CardHeader>
           <CardTitle className="text-base">Items</CardTitle>
         </CardHeader>
-
         <CardContent className="space-y-3">
           {(items ?? []).map((it) => {
             const name = it?.product?.name ?? it?.name ?? "Item";
@@ -257,20 +362,21 @@ export default function AdminOrderClient({
                   <Truck className="h-4 w-4" /> shipped
                 </span>
               </SelectItem>
+
               <SelectItem value="completed">
                 <span className="inline-flex items-center gap-2">
                   <CheckCircle2 className="h-4 w-4" /> completed
                 </span>
               </SelectItem>
-              <SelectItem value="cancelled">
+
+              {/* ✅ prevent known 409: paid orders can't be cancelled here */}
+              <SelectItem value="cancelled" disabled={pay === "paid"}>
                 <span className="inline-flex items-center gap-2">
                   <XCircle className="h-4 w-4" /> cancelled
                 </span>
               </SelectItem>
             </SelectContent>
           </Select>
-
-          <Button disabled className="hidden" />
 
           <div className="text-xs text-muted-foreground">
             {loading ? (
@@ -280,6 +386,86 @@ export default function AdminOrderClient({
             ) : (
               "Updates are saved immediately."
             )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Cancellation Request</CardTitle>
+          <CardDescription>
+            If the user requested cancellation (paid order), you can approve it and restore stock.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Requested</span>
+            <span className="font-medium">{cancelRequested ? "Yes" : "No"}</span>
+          </div>
+
+          {cancelReason ? (
+            <div className="rounded-lg border bg-muted/40 p-3 text-xs">
+              <div className="text-muted-foreground">Reason</div>
+              <div className="mt-1">{cancelReason}</div>
+            </div>
+          ) : null}
+
+          <div className="flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-between">
+            <Dialog open={approveOpen} onOpenChange={setApproveOpen}>
+              <DialogTrigger asChild>
+                <Button variant="destructive" disabled={approveDisabled}>
+                  <Ban className="h-4 w-4 mr-2" />
+                  {approveLoading ? "Approving..." : "Approve Cancel & Restock"}
+                </Button>
+              </DialogTrigger>
+
+              <DialogContent className="sm:max-w-[520px]">
+                <DialogHeader>
+                  <DialogTitle>Approve cancellation?</DialogTitle>
+                  <DialogDescription>
+                    This will mark the order as cancelled and restore product stock.
+                    This action cannot be undone.
+                  </DialogDescription>
+
+                  <div className="mt-2 rounded-lg border bg-muted/40 p-3 text-xs">
+                    <div className="text-muted-foreground">Order</div>
+                    <div className="mt-1 font-mono break-all">{orderId}</div>
+
+                    {cancelReason ? (
+                      <>
+                        <div className="mt-3 text-muted-foreground">Customer reason</div>
+                        <div className="mt-1">{cancelReason}</div>
+                      </>
+                    ) : null}
+                  </div>
+                </DialogHeader>
+
+                <DialogFooter className="gap-2 sm:gap-0">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setApproveOpen(false)}
+                    disabled={approveLoading}
+                  >
+                    Cancel
+                  </Button>
+
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    onClick={approveCancel}
+                    disabled={approveDisabled}
+                  >
+                    {approveLoading ? "Approving..." : "Yes, approve cancellation"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <div className="text-xs text-muted-foreground inline-flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4" />
+              Disabled if not paid or already shipped/completed/cancelled.
+            </div>
           </div>
         </CardContent>
       </Card>

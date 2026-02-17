@@ -1,7 +1,12 @@
+// app/api/midtrans/webhook/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { createSupabaseService } from "@/lib/supabase/service";
-import { sendOrderEmail, paidEmailTemplate, failedEmailTemplate } from "@/lib/resend"; 
+import { sendOrderEmail } from "@/lib/email/resend";
+import { failedEmailTemplate, paidEmailTemplate } from "@/lib/email/template";
 
 /**
  * Midtrans signature:
@@ -11,41 +16,64 @@ function verifySignature(body: any) {
   const serverKey = process.env.MIDTRANS_SERVER_KEY;
   if (!serverKey) return false;
 
-  const raw = `${body.order_id}${body.status_code}${body.gross_amount}${serverKey}`;
+  const orderId = String(body.order_id ?? "");
+  const statusCode = String(body.status_code ?? "");
+  const grossAmount = String(body.gross_amount ?? "");
+  const signatureKey = String(body.signature_key ?? "");
+
+  if (!orderId || !statusCode || !grossAmount || !signatureKey) return false;
+
+  const raw = `${orderId}${statusCode}${grossAmount}${serverKey}`;
   const expected = crypto.createHash("sha512").update(raw).digest("hex");
-  return expected === body.signature_key;
+  return expected === signatureKey;
 }
 
+/**
+ * Support:
+ * - "order-<uuid>"
+ * - "o-<32hex>-<suffix>" (from payment/continue)
+ * - "<uuid>" (optional fallback)
+ */
 function extractOrderUuid(providerOrderId: string): string | null {
-  if (!providerOrderId) return null;
-  const m = providerOrderId.match(/^order-([0-9a-fA-F-]{36})$/);
-  return m?.[1] ?? null;
+  const s = (providerOrderId || "").trim();
+
+  // order-<uuid>
+  let m = s.match(/^order-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/);
+  if (m?.[1]) return m[1].toLowerCase();
+
+  // o-<32hex>-<suffix>
+  m = s.match(/^o-([0-9a-fA-F]{32})-/);
+  if (m?.[1]) {
+    const x = m[1].toLowerCase();
+    return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`;
+  }
+
+  // raw uuid fallback
+  m = s.match(/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/);
+  if (m?.[1]) return m[1].toLowerCase();
+
+  return null;
 }
 
-function mapMidtransToOrder(body: any): {
-  status: string;
-  payment_status: string;
-  paid_at: string | null;
+function mapMidtrans(body: any): {
+  tx: string;
+  fraud: string;
+  isPaid: boolean;
+  isFailed: boolean;
+  isPending: boolean;
 } {
-  const tx = (body.transaction_status ?? "").toLowerCase();
-  const fraud = (body.fraud_status ?? "").toLowerCase();
-  const paidAt = new Date().toISOString();
+  const tx = String(body.transaction_status ?? "").toLowerCase();
+  const fraud = String(body.fraud_status ?? "").toLowerCase();
 
-  const isPaid = tx === "settlement" || tx === "capture" || tx === "success";
+  const isPaid =
+    tx === "settlement" ||
+    (tx === "capture" && (!fraud || fraud === "accept")) ||
+    tx === "success";
+
   const isFailed = tx === "deny" || tx === "expire" || tx === "cancel" || tx === "failure";
   const isPending = tx === "pending";
 
-  if (isPaid) {
-    if (fraud === "challenge") {
-      return { status: "pending", payment_status: "unpaid", paid_at: null };
-    }
-    return { status: "paid", payment_status: "paid", paid_at: paidAt };
-  }
-
-  if (isFailed) return { status: "cancelled", payment_status: "failed", paid_at: null };
-  if (isPending) return { status: "pending", payment_status: "unpaid", paid_at: null };
-
-  return { status: "pending", payment_status: "unpaid", paid_at: null };
+  return { tx, fraud, isPaid, isFailed, isPending };
 }
 
 export async function POST(req: Request) {
@@ -54,75 +82,89 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
+    // 1) Verify signature
     if (!verifySignature(body)) {
       return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
     }
 
-    const providerOrderId = body.order_id as string; // "order-<uuid>"
+    const providerOrderId = String(body.order_id ?? "");
     const orderId = extractOrderUuid(providerOrderId);
 
     if (!orderId) {
+      // Return 200 to stop retry storm (we can't map it)
       return NextResponse.json(
-        { error: "Invalid provider order_id format", providerOrderId },
-        { status: 400 }
+        { ok: true, warning: "unmapped_order_id", providerOrderId },
+        { status: 200 }
       );
     }
 
-    // 1) Update payments (recommended)
-    await service
+    const { tx, fraud, isPaid, isFailed } = mapMidtrans(body);
+
+    // 2) Update ONLY the payment row that matches this provider_order_id
+    // If you create a payment row before redirecting to Snap,
+    // provider_order_id should be unique per attempt.
+    const payUpdate = await service
       .from("payments")
       .update({
-        provider: "midtrans",
-        provider_order_id: providerOrderId, // ✅ ini harus order_id dari midtrans (order-uuid)
-        transaction_status: body.transaction_status ?? null,
-        fraud_status: body.fraud_status ?? null,
+        transaction_status: tx || null,
+        fraud_status: fraud || null,
         payment_type: body.payment_type ?? null,
+        transaction_id: body.transaction_id ?? null,
         gross_amount: Number(body.gross_amount ?? 0),
         payload: body,
+        updated_at: new Date().toISOString(),
       })
-      .eq("order_id", orderId);
+      .eq("provider_order_id", providerOrderId);
 
-    const mapped = mapMidtransToOrder(body);
-    const isPaid = mapped.payment_status === "paid";
-    const isFailed = mapped.payment_status === "failed";
+    if (payUpdate.error) {
+      console.warn("[midtrans webhook] payments update warning:", payUpdate.error);
+      // non-fatal
+    }
 
-    // 2) Ambil order + email user (profiles)
+    // 3) Load order + profile (for email)
     const { data: orderRow, error: orderErr } = await service
       .from("orders")
-      .select("id,user_id,total,payment_email_sent,failed_email_sent")
+      .select("id,user_id,total,payment_status,payment_email_sent,failed_email_sent")
       .eq("id", orderId)
-      .single();
+      .maybeSingle();
 
     if (orderErr || !orderRow) {
-      return NextResponse.json({ error: "Order not found" }, { status: 404 });
+      // stop retry storm: order not found
+      return NextResponse.json({ ok: true, warning: "order_not_found" }, { status: 200 });
     }
 
     const { data: profile } = await service
       .from("profiles")
       .select("email,full_name")
       .eq("id", orderRow.user_id)
-      .single();
+      .maybeSingle();
 
-    const to = profile?.email;
+    const to = profile?.email ?? null;
     const appUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || "";
 
-    // 3) Paid branch
+    // 4) Paid branch -> RPC (single source of truth for stock + paid)
     if (isPaid) {
-      // Optional RPC fulfill
       const { error: rpcErr } = await service.rpc("fulfill_order_paid", {
         p_order_id: orderId,
+        p_provider_order_id: providerOrderId,
+        p_transaction_status: tx,
+        p_fraud_status: fraud || null,
+        p_payment_type: body.payment_type ?? null,
+        p_gross_amount: Number(body.gross_amount ?? 0),
+        p_payload: body,
       });
 
-      await service
-        .from("orders")
-        .update({
-          status: mapped.status,                 // "paid" (atau kamu bisa ganti jadi "processing")
-          payment_status: mapped.payment_status, // "paid"
-          paid_at: mapped.paid_at,
-        })
-        .eq("id", orderId);
+      if (rpcErr) {
+        console.error("[midtrans webhook] fulfill_order_paid failed:", rpcErr);
+        // Return 200 so Midtrans doesn't spam retries.
+        // But your system should alert/log this.
+        return NextResponse.json(
+          { ok: true, warning: "paid_but_fulfill_failed", detail: rpcErr.message },
+          { status: 200 }
+        );
+      }
 
-      // ✅ Send email sekali saja
+      // send paid email once
       if (to && !orderRow.payment_email_sent) {
         await sendOrderEmail({
           to,
@@ -143,36 +185,31 @@ export async function POST(req: Request) {
           .eq("id", orderId);
       }
 
-      // Midtrans harus tetap 200 (biar tidak retry spam)
-      if (rpcErr) {
-        console.error("[midtrans] fulfill_order_paid error:", rpcErr.message);
-        return NextResponse.json(
-          { ok: true, warning: "paid_but_fulfill_failed", detail: rpcErr.message },
-          { status: 200 }
-        );
-      }
-
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
-    // 4) Non-paid (pending/failed/cancel/expire)
+    // 5) Non-paid branch -> mark pending/failed, optionally release stock if you reserve earlier
+    const nextPaymentStatus = isFailed ? "failed" : "unpaid";
+    const nextOrderStatus = isFailed ? "cancelled" : "pending";
+
     await service
       .from("orders")
       .update({
-        status: mapped.status,
-        payment_status: mapped.payment_status,
-        paid_at: mapped.paid_at, // null untuk pending/failed
+        status: nextOrderStatus,
+        payment_status: nextPaymentStatus,
+        paid_at: null,
+        updated_at: new Date().toISOString(),
       })
       .eq("id", orderId);
 
-    // ✅ Optional: kirim email gagal/expired sekali saja
+    // send failed email once
     if (isFailed && to && !orderRow.failed_email_sent) {
       await sendOrderEmail({
         to,
         subject: `Pembayaran gagal / expired (Order ${orderId})`,
         html: failedEmailTemplate({
           orderId,
-          reason: `${body.transaction_status ?? "failed"}${body.fraud_status ? ` (${body.fraud_status})` : ""}`,
+          reason: `${tx}${fraud ? ` (${fraud})` : ""}`,
           appUrl,
         }),
       });
@@ -188,7 +225,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (e: any) {
-    console.error("[midtrans notification] error:", e?.message ?? e);
+    console.error("[midtrans webhook] error:", e?.message ?? e);
     return NextResponse.json({ error: e?.message ?? "Server error" }, { status: 500 });
   }
 }
