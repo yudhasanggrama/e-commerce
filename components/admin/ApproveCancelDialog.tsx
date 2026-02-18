@@ -31,7 +31,7 @@ export function ApproveCancelDialog({
   async function approve() {
     setLoading(true);
     try {
-      const res = await fetch("/api/admin/orders/cancel/approve", {
+      const res = await fetch("/api/admin/orders/cancel", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ order_id: orderId, note }),

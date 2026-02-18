@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { useCartStore } from "@/stores/cart.store";
 import { cn } from "@/lib/utils";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+
 import {
   Ban,
   RefreshCw,
@@ -68,7 +70,8 @@ function isTerminal(order: OrderRow) {
 
 function canCancel(order: OrderRow) {
   const st = statusLower(order);
-  if (st === "shipped" || st === "completed" || st === "cancelled" || st === "expired") return false;
+  if (st === "shipped" || st === "completed" || st === "cancelled" || st === "expired")
+    return false;
   return true;
 }
 
@@ -84,7 +87,6 @@ export default function RealtimeOrderClient({
 
   const [payLoading, setPayLoading] = useState(false);
   const [checkLoading, setCheckLoading] = useState(false);
-  const [cancelLoading, setCancelLoading] = useState(false);
 
   const didClearCart = useRef(false);
   const waitingPaidRef = useRef(false);
@@ -164,12 +166,18 @@ export default function RealtimeOrderClient({
   }, []);
 
   const unpaid = !isPaid(order);
+  const paid = isPaid(order);
   const terminal = isTerminal(order);
   const cancellable = canCancel(order);
 
-  const cancelLabel = unpaid ? "Cancel order" : "Request cancel";
+  // cancellation request fields (keep safe even if OrderRow type not updated yet)
+  const requestedCancel = Boolean((order as any)?.cancel_requested);
+  const cancelReason = ((order as any)?.cancel_reason ?? "") as string;
+
   const cancelHelp = unpaid
     ? "You can cancel before payment is completed."
+    : requestedCancel
+    ? "Cancellation request sent. Waiting for admin approval."
     : "Paid orders require admin approval before cancellation.";
 
   async function checkStatus() {
@@ -178,7 +186,9 @@ export default function RealtimeOrderClient({
 
     setCheckLoading(true);
     try {
-      const res = await fetch(`/api/payment/status?order_id=${orderId}`, { cache: "no-store" });
+      const res = await fetch(`/api/payment/status?order_id=${orderId}`, {
+        cache: "no-store",
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Failed to check status");
 
@@ -227,7 +237,8 @@ export default function RealtimeOrderClient({
 
           if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
           fallbackTimerRef.current = setTimeout(() => {
-            if (waitingPaidRef.current && !isPaid(order) && !isTerminal(order)) checkStatus();
+            if (waitingPaidRef.current && !isPaid(order) && !isTerminal(order))
+              checkStatus();
           }, 8000);
         },
         onPending: () => {
@@ -253,46 +264,6 @@ export default function RealtimeOrderClient({
     }
   }
 
-  async function cancelOrRequestCancel() {
-    if (!cancellable) {
-      toast.error("Order tidak bisa dibatalkan.");
-      return;
-    }
-
-    if (terminal) {
-      toast.error("Order sudah ditutup.");
-      return;
-    }
-
-    const paid = isPaid(order);
-
-    const ok = window.confirm(
-      paid
-        ? "Order sudah dibayar. Ini akan mengirim permintaan pembatalan ke admin. Lanjut?"
-        : "Batalkan order ini?"
-    );
-    if (!ok) return;
-
-    setCancelLoading(true);
-    try {
-      const res = await fetch(paid ? "/api/orders/cancel-request" : "/api/orders/cancel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ order_id: orderId }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `Failed (${res.status})`);
-
-      toast.success(paid ? "Permintaan cancel dikirim ke admin." : "Order berhasil dibatalkan.");
-      router.refresh();
-    } catch (e: any) {
-      toast.error(e?.message ?? "Error");
-    } finally {
-      setCancelLoading(false);
-    }
-  }
-
   const terminalMsg =
     statusLower(order) === "cancelled"
       ? "Order telah dibatalkan. Pembayaran tidak dapat dilanjutkan."
@@ -308,7 +279,9 @@ export default function RealtimeOrderClient({
         <div className="min-w-0">
           <div className="text-sm text-muted-foreground">Live payment</div>
           <div className="text-sm">
-            <span className="font-semibold capitalize">{String(order.payment_status ?? "")}</span>
+            <span className="font-semibold capitalize">
+              {String(order.payment_status ?? "")}
+            </span>
           </div>
         </div>
 
@@ -317,7 +290,7 @@ export default function RealtimeOrderClient({
 
       <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
         <span className="relative flex h-2 w-2">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full rounded-full bg-green-400 opacity-75" />
           <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
         </span>
         Monitoring order in realtime...
@@ -345,7 +318,9 @@ export default function RealtimeOrderClient({
                   disabled={payLoading}
                   className="text-black w-full"
                 >
-                  <CreditCard className={cn("h-4 w-4 mr-2", payLoading && "animate-pulse")} />
+                  <CreditCard
+                    className={cn("h-4 w-4 mr-2", payLoading && "animate-pulse")}
+                  />
                   {payLoading ? "Opening payment..." : "Continue payment"}
                 </Button>
 
@@ -355,29 +330,53 @@ export default function RealtimeOrderClient({
                   disabled={checkLoading}
                   className="w-full"
                 >
-                  <RefreshCw className={cn("h-4 w-4 mr-2", checkLoading && "animate-spin")} />
+                  <RefreshCw
+                    className={cn("h-4 w-4 mr-2", checkLoading && "animate-spin")}
+                  />
                   {checkLoading ? "Checking..." : "Check status"}
                 </Button>
               </>
             ) : (
-              <div className="sm:col-span-2 rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground flex items-start gap-2">
-                <ShieldAlert className="h-4 w-4 mt-0.5" />
-                <div>
-                  <div className="font-medium text-foreground/90">Paid order</div>
-                  <div>Cancellation requires admin approval.</div>
+              <div className="sm:col-span-2 space-y-2">
+                <div className="rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground flex items-start gap-2">
+                  <ShieldAlert className="h-4 w-4 mt-0.5" />
+                  <div>
+                    <div className="font-medium text-foreground/90">Paid order</div>
+                    <div>Cancellation requires admin approval.</div>
+                  </div>
                 </div>
+
+                {requestedCancel ? (
+                  <div className="rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground">
+                    <div className="font-medium text-foreground/90">
+                      Cancellation requested
+                    </div>
+                    <div className="mt-1">
+                      Request already sent. Waiting for admin approval.
+                    </div>
+
+                    {cancelReason ? (
+                      <>
+                        <div className="mt-3 text-muted-foreground">Reason</div>
+                        <div className="mt-1">{cancelReason}</div>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             )}
 
-            <Button
-              variant="destructive"
-              onClick={cancelOrRequestCancel}
-              disabled={cancelLoading || !cancellable}
-              className={cn("w-full", unpaid ? "" : "sm:col-span-2")}
-            >
-              <Ban className={cn("h-4 w-4 mr-2", cancelLoading && "animate-pulse")} />
-              {cancelLoading ? "Processing..." : cancelLabel}
-            </Button>
+            <div className={cn("w-full", unpaid ? "" : "sm:col-span-2")}>
+              <div className="w-full [&_button]:w-full [&_button]:h-11 [&_button]:text-sm">
+                <ConfirmDialog
+                  orderId={orderId}
+                  paid={paid}
+                  defaultReason={paid ? cancelReason : null}
+                  disabled={!cancellable || (paid && requestedCancel)}
+                  onDone={() => router.refresh()}
+                />
+              </div>
+            </div>
           </div>
 
           <div className="mt-2 text-[11px] text-muted-foreground">

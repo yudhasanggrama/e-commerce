@@ -13,80 +13,118 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { ShieldCheck, XCircle } from "lucide-react";
+import { Ban, XCircle } from "lucide-react";
 
-export function ApproveCancelDialog({
+export function ConfirmDialog({
   orderId,
+  paid,
   disabled = false,
-  onApproved,
+  defaultReason,
+  onDone,
 }: {
   orderId: string;
+  paid: boolean;
   disabled?: boolean;
-  onApproved?: () => void;
+  defaultReason?: string | null;
+  onDone?: () => void; // e.g router.refresh()
 }) {
   const [open, setOpen] = React.useState(false);
-  const [note, setNote] = React.useState("");
+  const [reason, setReason] = React.useState(defaultReason ?? "");
   const [loading, setLoading] = React.useState(false);
 
-  async function approve() {
+  // keep reason in sync when order changes
+  React.useEffect(() => {
+    setReason(defaultReason ?? "");
+  }, [defaultReason, orderId]);
+
+  async function submit() {
+    if (disabled || loading) return;
+
+    // For paid orders, reason is recommended (not strictly required by your API)
+    if (paid && !String(reason ?? "").trim()) {
+      toast.error("Please provide a reason for cancellation request.");
+      return;
+    }
+
     setLoading(true);
     try {
-      const res = await fetch("/api/admin/orders/cancel/approve", {
+      const url = paid ? "/api/orders/cancel-request" : "/api/orders/cancel";
+      const payload = paid
+        ? { order_id: orderId, reason: String(reason ?? "").trim() }
+        : { order_id: orderId };
+
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ order_id: orderId, note }),
+        body: JSON.stringify(payload),
       });
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || `Failed (${res.status})`);
 
-      toast.success("Cancel approved");
+      if (paid) {
+        toast.success(data?.already ? "Cancellation request already sent." : "Cancellation request sent.");
+      } else {
+        toast.success("Order cancelled.");
+      }
+
       setOpen(false);
-      setNote("");
-      onApproved?.(); // e.g router.refresh()
+      onDone?.();
     } catch (e: any) {
-      toast.error(e?.message ?? "Approve failed");
-      // keep open
+      toast.error(e?.message ?? "Failed");
     } finally {
       setLoading(false);
     }
   }
 
+  const title = paid ? "Request cancellation?" : "Cancel order?";
+  const desc = paid
+    ? "This order is already paid. Your request will be sent to admin for approval."
+    : "This will cancel your order immediately (unpaid order).";
+
   return (
     <Dialog open={open} onOpenChange={(v) => !disabled && setOpen(v)}>
       <DialogTrigger asChild>
-        <Button disabled={disabled} variant="destructive">
-          <ShieldCheck className="h-4 w-4 mr-2" />
-          Approve cancel
+        <Button variant="destructive" disabled={disabled}>
+          <Ban className="h-4 w-4 mr-2" />
+          {paid ? "Request cancel" : "Cancel order"}
         </Button>
       </DialogTrigger>
 
       <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
-          <DialogTitle>Approve cancellation?</DialogTitle>
-          <DialogDescription>
-            This will cancel the order and (if your RPC does it) restore stock / mark refund flow.
-            Make sure the order has not been shipped.
-          </DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{desc}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-2">
-          <div className="text-xs text-muted-foreground">Optional note (visible to logs/admin)</div>
-          <Textarea
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Example: Customer requested cancellation due to wrong address."
-            rows={4}
-          />
-        </div>
+        {paid ? (
+          <div className="space-y-2">
+            <div className="text-xs text-muted-foreground">
+              Reason (required for paid orders)
+            </div>
+            <Textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Example: Wrong address / ordered by mistake / want to change item."
+              rows={4}
+              disabled={loading}
+            />
+          </div>
+        ) : null}
 
         <DialogFooter className="gap-2 sm:gap-0">
-          <Button variant="outline" onClick={() => setOpen(false)} disabled={loading}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setOpen(false)}
+            disabled={loading}
+          >
             <XCircle className="h-4 w-4 mr-2" />
             Close
           </Button>
-          <Button onClick={approve} disabled={loading} variant="destructive">
-            {loading ? "Approving..." : "Confirm approve"}
+
+          <Button type="button" variant="destructive" onClick={submit} disabled={disabled || loading}>
+            {loading ? "Processing..." : paid ? "Send request" : "Confirm cancel"}
           </Button>
         </DialogFooter>
       </DialogContent>

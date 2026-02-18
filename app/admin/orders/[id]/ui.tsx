@@ -4,18 +4,11 @@ import Image from "next/image";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import {
-  ArrowLeft,
-  CheckCircle2,
-  Loader2,
-  Truck,
-  XCircle,
-  Ban,
-  ShieldCheck,
-} from "lucide-react";
+import { ArrowLeft, CheckCircle2, Loader2, Truck, XCircle, ShieldCheck } from "lucide-react";
 
 import OrderStatusBadge from "@/components/order/OrderStatusBadge";
 import PaymentStatusBadge from "@/components/order/PaymentStatusBadge";
+import { ApproveCancelDialog } from "@/components/admin/ApproveCancelDialog";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -33,16 +26,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 
 import { useResilientRealtime } from "@/hooks/useResilientRealtime";
 import { OrderStatus, PaymentStatus } from "@/types/order";
@@ -94,9 +77,6 @@ export default function AdminOrderClient({
     order.cancel_reason ?? null
   );
 
-  const [approveLoading, setApproveLoading] = useState(false);
-  const [approveOpen, setApproveOpen] = useState(false);
-
   const orderId = String(order?.id ?? "");
   const rtEnabled = Boolean(orderId);
 
@@ -123,7 +103,8 @@ export default function AdminOrderClient({
 
       // ✅ update state by field presence (not truthy)
       if ("status" in next) setStatus(String(next.status ?? ""));
-      if ("payment_status" in next) setPaymentStatus(String(next.payment_status ?? ""));
+      if ("payment_status" in next)
+        setPaymentStatus(String(next.payment_status ?? ""));
 
       // listen to cancellation fields too
       if (typeof next?.cancel_requested === "boolean") {
@@ -195,39 +176,11 @@ export default function AdminOrderClient({
   }
 
   const approveDisabled =
-    approveLoading ||
     !cancelRequested ||
     pay !== "paid" ||
     st === "shipped" ||
     st === "completed" ||
     st === "cancelled";
-
-  async function approveCancel() {
-    if (approveDisabled) return;
-
-    setApproveLoading(true);
-    try {
-      const res = await fetch("/api/admin/orders/cancel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          order_id: orderId,
-          note: "Approved by admin",
-        }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error ?? `Request failed (${res.status})`);
-
-      toast.success("Cancellation approved. Stock restored.");
-      setApproveOpen(false);
-      router.refresh();
-    } catch (e: any) {
-      toast.error(e?.message ?? "Approval failed");
-    } finally {
-      setApproveLoading(false);
-    }
-  }
 
   return (
     <div className="p-4 max-w-3xl mx-auto space-y-4">
@@ -397,6 +350,7 @@ export default function AdminOrderClient({
             If the user requested cancellation (paid order), you can approve it and restore stock.
           </CardDescription>
         </CardHeader>
+
         <CardContent className="space-y-3">
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">Requested</span>
@@ -411,56 +365,11 @@ export default function AdminOrderClient({
           ) : null}
 
           <div className="flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-between">
-            <Dialog open={approveOpen} onOpenChange={setApproveOpen}>
-              <DialogTrigger asChild>
-                <Button variant="destructive" disabled={approveDisabled}>
-                  <Ban className="h-4 w-4 mr-2" />
-                  {approveLoading ? "Approving..." : "Approve Cancel & Restock"}
-                </Button>
-              </DialogTrigger>
-
-              <DialogContent className="sm:max-w-[520px]">
-                <DialogHeader>
-                  <DialogTitle>Approve cancellation?</DialogTitle>
-                  <DialogDescription>
-                    This will mark the order as cancelled and restore product stock.
-                    This action cannot be undone.
-                  </DialogDescription>
-
-                  <div className="mt-2 rounded-lg border bg-muted/40 p-3 text-xs">
-                    <div className="text-muted-foreground">Order</div>
-                    <div className="mt-1 font-mono break-all">{orderId}</div>
-
-                    {cancelReason ? (
-                      <>
-                        <div className="mt-3 text-muted-foreground">Customer reason</div>
-                        <div className="mt-1">{cancelReason}</div>
-                      </>
-                    ) : null}
-                  </div>
-                </DialogHeader>
-
-                <DialogFooter className="gap-2 sm:gap-0">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setApproveOpen(false)}
-                    disabled={approveLoading}
-                  >
-                    Cancel
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    onClick={approveCancel}
-                    disabled={approveDisabled}
-                  >
-                    {approveLoading ? "Approving..." : "Yes, approve cancellation"}
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
+            <ApproveCancelDialog
+              orderId={orderId}
+              disabled={approveDisabled}
+              onApproved={() => router.refresh()}
+            />
 
             <div className="text-xs text-muted-foreground inline-flex items-center gap-2">
               <ShieldCheck className="h-4 w-4" />
