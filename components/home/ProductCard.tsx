@@ -11,6 +11,7 @@ import type { Product } from "@/types/product";
 import { useCartStore } from "@/stores/cart.store";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { useAuthModalStore } from "@/stores/auth-modal.store";
+import { toast } from "sonner";
 
 
 const formatIDR = (n: number) =>
@@ -41,14 +42,14 @@ export default function ProductCard({ product }: { product: Product }) {
 
     if (!isAuthed) {
       openAuthModal(async () => {
-        addToCart(
+        await addToCart(
           {
             id: product.id,
-            name: product.name,
             price: product.price,
-            image: imgSrc ?? "",
             stock: product.stock ?? 0,
+            name: product.name,
             slug: product.slug,
+            image: imgSrc ?? "",
           },
           1
         );
@@ -57,23 +58,24 @@ export default function ProductCard({ product }: { product: Product }) {
     }
 
     setIsAdding(true);
-    await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, 250));
 
-    addToCart(
-      {
-        id: product.id,
-        name: product.name,
-        price: product.price,
-        image: imgSrc ?? "",
-        stock: product.stock ?? 0,
-        slug: product.slug,
-      },
-      1
-    );
+      await addToCart(
+        {
+          id: product.id,
+          price: product.price,
+          stock: product.stock ?? 0,
+          name: product.name,
+          slug: product.slug,
+          image: imgSrc ?? "",
+        },
+        1
+      );
 
-    setIsAdding(false);
-    setJustAdded(true);
-    setTimeout(() => setJustAdded(false), 1600);
+      setIsAdding(false);
+      setJustAdded(true);
+      setTimeout(() => setJustAdded(false), 1600);
+      toast.success("Product added to cart");
   };
 
 
@@ -114,7 +116,7 @@ export default function ProductCard({ product }: { product: Product }) {
             "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium",
             outOfStock ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary"
           )}>
-            {outOfStock ? "Stok habis" : `Stok ${product.stock}`}
+            {outOfStock ? "Out of stocks" : `Stock ${product.stock}`}
           </span>
         </div>
 
@@ -150,22 +152,22 @@ export default function ProductCard({ product }: { product: Product }) {
 
             <div className={cn(
               "absolute inset-x-0 bottom-0 p-3",
-              "bg-gradient-to-t from-background/80 to-transparent",
-              "opacity-100 sm:opacity-0 sm:group-hover:opacity-100",
+              "bg-linear-to-t from-background/80 to-transparent",
+              "hidden sm:block opacity-0 group-hover:opacity-100",
               "transition-opacity duration-200"
-            )}>
-              <Button
-                size="sm"
-                className="w-full"
-                variant="secondary"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                }}
-              >
-                <Eye className="mr-2 h-4 w-4" />
-                Show Details
-              </Button>
+              )}>
+                <Button
+                  size="sm"
+                  className="w-full"
+                  variant="secondary"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                >
+                  <Eye className="mr-2 h-4 w-4" />
+                  Show Details
+                </Button>
             </div>
           </div>
         </Link>
@@ -186,6 +188,7 @@ export default function ProductCard({ product }: { product: Product }) {
             ) : null}
           </div>
         </div>
+
 
         <Button
           className={cn(
@@ -213,6 +216,16 @@ export default function ProductCard({ product }: { product: Product }) {
             </div>
           )}
         </Button>
+
+         <div className="sm:hidden flex items-center justify-center gap-2 ">
+            <Button variant="outline" asChild className="w-full">
+              <Link href={`/product/${product.slug}`}>
+                <Eye className="mr-2 h-4 w-4" />
+                Detail
+              </Link>
+            </Button>
+        </div>
+
       </CardContent>
     </Card>
   );

@@ -15,24 +15,25 @@ interface CartItemProps {
 }
 
 export default function CartItem({ item, isLast }: CartItemProps) {
-  const removeFromCart = useCartStore((s) => s.removeFromCart);
-  const updateQuantity = useCartStore((s) => s.updateQuantity);
+  const remove = useCartStore((s) => s.remove);
+  const updateQty = useCartStore((s) => s.updateQty);
+  const imgSrc = item.image_url || "/placeholder.png";
 
   const outOfStock = item.stock <= 0;
-  const disablePlus = outOfStock || item.quantity >= item.stock;
+  const disablePlus = outOfStock || item.qty >= item.stock;
 
   return (
     <div>
       <div className="flex items-start gap-4">
-        <div className="relative w-[100px] h-[100px]">
+        <div className="relative w-24 h-24">
           <Image
-            src={item.image || "/placeholder.png"}
-            alt={item.name}
-            fill
-            sizes="100px"
-            className="rounded-lg object-cover bg-muted"
-            unoptimized
-          />
+              src={item.image_url || "/placeholder.png"}
+              alt={item.name}
+              fill
+              sizes="96px"
+              className="rounded-lg object-cover bg-muted"
+              unoptimized
+            />
         </div>
 
         <div className="flex-1 min-w-0">
@@ -52,7 +53,7 @@ export default function CartItem({ item, isLast }: CartItemProps) {
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => removeFromCart(item.id)}
+              onClick={() => remove(item.id)}
               className="text-muted-foreground hover:text-destructive h-8 w-8 shrink-0"
             >
               <Trash2 className="h-4 w-4" />
@@ -64,21 +65,21 @@ export default function CartItem({ item, isLast }: CartItemProps) {
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => updateQuantity(item.id, Math.max(1, item.quantity - 1))}
-                disabled={item.quantity <= 1}
+                onClick={() => updateQty(item.id, Math.max(1, item.qty - 1))}
+                disabled={item.qty <= 1}
                 className="h-8 w-8 rounded-r-none"
               >
                 <Minus className="h-3 w-3" />
               </Button>
 
-              <span className="px-4 py-2 min-w-[50px] text-center text-sm font-medium">
-                {item.quantity}
+              <span className="px-4 py-2 min-w-12 text-center text-sm font-medium">
+                {item.qty}
               </span>
 
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                onClick={() => updateQty(item.id, item.qty + 1)}
                 disabled={disablePlus}
                 className="h-8 w-8 rounded-l-none"
               >
@@ -88,7 +89,7 @@ export default function CartItem({ item, isLast }: CartItemProps) {
 
             <div className="text-right">
               <p className="text-lg font-bold text-foreground">
-                {formatIDR(item.price * item.quantity)}
+                {formatIDR(item.price * item.qty)}
               </p>
             </div>
           </div>

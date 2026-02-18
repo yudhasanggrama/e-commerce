@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { createSupabaseBrowser } from "@/lib/supabase/client";
@@ -17,12 +17,38 @@ export default function LoginPage() {
   const router = useRouter();
   const sp = useSearchParams();
   const next = sp.get("next") || "/";
-  const supabase = createSupabaseBrowser();
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loadingEmail, setLoadingEmail] = useState(false);
   const [loadingGoogle, setLoadingGoogle] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!alive) return;
+      if (data.session) {
+        router.replace(next);
+        router.refresh();
+      }
+    })();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
+      if (session) {
+        router.replace(next);
+        router.refresh();
+      }
+    });
+
+    return () => {
+      alive = false;
+      sub.subscription.unsubscribe();
+    };
+  }, [router, next, supabase]);
+    
 
   async function loginWithGoogle() {
   try {
@@ -57,40 +83,23 @@ export default function LoginPage() {
     e.preventDefault();
     setLoadingEmail(true);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    setLoadingEmail(false);
-    if (error) return toast.error(error.message);
+      if (error) return toast.error(error.message);
 
-    // ambil user
-    const { data: userRes } = await supabase.auth.getUser();
-    const user = userRes.user;
-
-    if (!user) return;
-
-    // cek profile di DB
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("full_name")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    toast.success("Login sukses");
-
-    // 🚨 kalau belum ada full name → complete profile
-    if (!profile?.full_name) {
-      router.push("/complete-profile");
+      // 🔥 redirect langsung
+      router.replace(next);
       router.refresh();
-      return;
-    }
 
-    // kalau sudah punya profile
-    router.push(next ?? "/");
-    router.refresh();
+    } finally {
+      setLoadingEmail(false);
+    }
   }
+
 
 
   return (

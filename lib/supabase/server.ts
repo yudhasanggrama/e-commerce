@@ -14,11 +14,11 @@ export async function createSupabaseServer() {
         },
         setAll(cookiesToSet) {
           try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            );
+            cookiesToSet.forEach(({ name, value, options }) => {
+              cookieStore.set(name, value, options);
+            });
           } catch {
-            // Server Components kadang tidak boleh set cookies
+            // aman diabaikan untuk beberapa konteks
           }
         },
       },

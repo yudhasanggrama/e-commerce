@@ -11,8 +11,6 @@ const nav = [
   { href: "/admin/products", label: "Products", icon: Package },
   { href: "/admin/categories", label: "Categories", icon: Tags },
   { href: "/admin/orders", label: "Orders", icon: ShoppingCart },
-  { href: "/admin/customers", label: "Customers", icon: Users },
-  { href: "/admin/settings", label: "Settings", icon: Settings },
 ];
 
 export default function AdminSidebar() {
@@ -23,7 +21,7 @@ export default function AdminSidebar() {
       <div className="px-5 py-5">
         <Link href="/admin" className="block">
           <div className="text-lg font-semibold tracking-tight">
-            PHONE<span className="text-primary">COMMERCE</span>
+            LAPPY<span className="text-primary">GO</span>
           </div>
           <div className="text-xs text-muted-foreground">Admin Panel</div>
         </Link>

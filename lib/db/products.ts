@@ -68,6 +68,19 @@ export async function getCategories() {
   return data ?? [];
 }
 
+export async function getCategoriesForHome(limit = 6) {
+  const supabase = await createSupabaseServer();
+
+  const { data, error } = await supabase
+    .from("categories")
+    .select("*")
+    .order("name", { ascending: true })
+    .limit(limit);
+
+  if (error) throw error;
+  return data ?? [];
+}
+
 export async function getProducts(params: {
     search?: string;
     category?: string;

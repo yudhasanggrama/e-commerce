@@ -7,7 +7,6 @@ export async function GET(request: Request) {
   const error = searchParams.get("error");
   const error_description = searchParams.get("error_description");
 
-  // kalau ada error dari oauth, lempar balik ke /login biar kebaca
   if (error) {
     return NextResponse.redirect(
       `${origin}/login?error=${encodeURIComponent(error)}&message=${encodeURIComponent(
@@ -19,14 +18,34 @@ export async function GET(request: Request) {
   if (!code) return NextResponse.redirect(`${origin}/login?error=no_code`);
 
   const supabase = await createSupabaseServer();
-  const { error: exErr } = await supabase.auth.exchangeCodeForSession(code);
+  
+  // 1. Tukar code dengan session di sisi server
+  const { data, error: exErr } = await supabase.auth.exchangeCodeForSession(code);
 
-  if (exErr) {
+  if (exErr || !data.user) {
     return NextResponse.redirect(
-      `${origin}/login?error=oauth_exchange&message=${encodeURIComponent(exErr.message)}`
+      `${origin}/login?error=oauth_exchange&message=${encodeURIComponent(exErr?.message ?? "")}`
     );
   }
 
-  // selesai exchange, arahkan ke halaman client
-  return NextResponse.redirect(`${origin}/auth/callback-client`);
+  // 2. Ambil profile secara instan di server untuk cek role & kelengkapan
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("full_name, role")
+    .eq("id", data.user.id)
+    .maybeSingle();
+
+  // 3. Tentukan arah redirect langsung dari server
+  // Cek apakah profil sudah lengkap (full_name)
+  if (!profile || !profile.full_name?.trim()) {
+    return NextResponse.redirect(`${origin}/complete-profile`);
+  }
+
+  // Jika admin, langsung tembak ke dashboard admin
+  if (profile.role === "admin") {
+    return NextResponse.redirect(`${origin}/admin/products`);
+  }
+
+  // User biasa ke home
+  return NextResponse.redirect(`${origin}/`);
 }

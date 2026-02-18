@@ -1,10 +1,16 @@
 import AdminProductFormClient from "@/components/admin/admin-product-form-client";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
+import { createSupabaseAdmin } from "@/lib/supabase/admin";
 
 function isUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
+
+
+const BUCKET = "product-images";
+const SIGN_EXPIRES_IN = 60 * 30;
+
 
 export default async function EditProductPage({
   params,
@@ -26,15 +32,23 @@ export default async function EditProductPage({
   if (catErr) throw new Error(catErr.message);
   if (!product) return notFound();
 
-  // ✅ pastikan plain JSON biar stabil
-  const safeProduct = JSON.parse(JSON.stringify(product));
+  let image_signed_url: string | null = null;
+
+  if (product.image_url) {
+    const admin = createSupabaseAdmin();
+    const { data, error } = await admin.storage
+      .from(BUCKET)
+      .createSignedUrl(product.image_url, SIGN_EXPIRES_IN);
+
+    if (!error) image_signed_url = data?.signedUrl ?? null;
+  }
+
+  const safeProduct = JSON.parse(JSON.stringify({ ...product, image_signed_url }));
+
   const safeCategories = JSON.parse(JSON.stringify(categories ?? []));
 
   return (
     <main className="p-6">
-      <h1 className="text-2xl font-semibold mb-4">Edit Produk</h1>
-
-      {/* ✅ render form dari client wrapper */}
       <AdminProductFormClient categories={safeCategories} defaultValues={safeProduct} />
     </main>
   );
