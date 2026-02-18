@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { createSupabaseService } from "@/lib/supabase/service";
 
@@ -9,14 +9,18 @@ const BUCKET = "product-images";
 const SIGN_EXPIRES_IN = 60 * 10;
 
 export async function GET(
-  _req: Request,
-  { params }: { params: { id: string } }
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
+
   const supabase = await createSupabaseServer();
   const service = createSupabaseService();
 
   const { data: userRes } = await supabase.auth.getUser();
-  if (!userRes.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!userRes.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const { data: me } = await supabase
     .from("profiles")
@@ -24,9 +28,9 @@ export async function GET(
     .eq("id", userRes.user.id)
     .maybeSingle();
 
-  if (me?.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-
-  const id = params.id;
+  if (me?.role !== "admin") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const { data: order, error } = await supabase
     .from("orders")
