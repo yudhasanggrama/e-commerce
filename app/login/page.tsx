@@ -51,32 +51,37 @@ export default function LoginPage() {
     
 
   async function loginWithGoogle() {
-  try {
-    setLoadingGoogle(true);
+    try {
+      setLoadingGoogle(true);
 
-    const origin = window.location.origin;
-    const redirectTo = `${window.location.origin}/auth/callback`;
+      // safest: pakai origin runtime (lokal: http://localhost:3000, prod: https://lappygo.vercel.app)
+      const baseUrl =
+        process.env.NEXT_PUBLIC_SITE_URL?.trim() || window.location.origin;
 
+      const redirectTo = `${baseUrl}/auth/callback`;
 
-    console.log("redirectTo:", redirectTo);
+      console.log("redirectTo:", redirectTo);
 
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo },
-    });
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo },
+      });
 
-    console.log("oauth data:", data);
-    if (error) {
-      console.error("oauth error:", error);
-      toast.error(error.message);
+      if (error) {
+        console.error("oauth error:", error);
+        toast.error(error.message);
+        return;
+      }
+
+      console.log("oauth data:", data);
+    } catch (e: any) {
+      console.error("loginWithGoogle catch:", e);
+      toast.error(e?.message ?? "Unexpected error");
+    } finally {
+      setLoadingGoogle(false);
     }
-  } catch (e: any) {
-    console.error("loginWithGoogle catch:", e);
-    toast.error(e?.message ?? "Unexpected error");
-  } finally {
-    setLoadingGoogle(false);
   }
-  }
+
 
 
   async function onSubmit(e: React.FormEvent) {
