@@ -7,7 +7,12 @@ import Image from "next/image";
 import { useCartStore, type CartItem as CartItemType } from "@/stores/cart.store";
 
 const formatIDR = (n: number) =>
-  new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR" }).format(n);
+  new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(n);
 
 interface CartItemProps {
   item: CartItemType;

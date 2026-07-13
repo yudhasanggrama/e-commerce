@@ -19,7 +19,12 @@ import { toast } from "sonner";
 import { useResilientRealtime } from "@/hooks/useResilientRealtime";
 
 const formatIDR = (n: number) =>
-  new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR" }).format(n);
+  new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(n);
 
 function toNum(v: any): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;

@@ -5,7 +5,12 @@ import Link from "next/link";
 import type { Product } from "@/lib/db/products";
 
 const formatIDR = (n: number) =>
-  new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR" }).format(n);
+  new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(n);
 
 export default function RelatedProducts({ relatedProducts }: { relatedProducts: Product[] }) {
   if (!relatedProducts?.length) return null;

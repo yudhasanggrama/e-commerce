@@ -9,7 +9,12 @@ import Link from "next/link";
 import { useCartStore } from "@/stores/cart.store";
 
 const formatIDR = (n: number) =>
-  new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR" }).format(n);
+  new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(n);
 
 export default function OrderSummary() {
   const cart = useCartStore((s) => s.cart);
